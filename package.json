@@ -1,6 +1,6 @@
 {
   "name": "opencut-cn-desktop",
-  "version": "0.4.0",
+  "version": "1.0.1",
   "private": true,
   "description": "OpenCut 中文版：离线优先的 Windows 视频剪辑桌面应用",
   "main": "apps/electron/main.cjs",
