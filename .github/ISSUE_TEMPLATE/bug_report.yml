@@ -1,0 +1,44 @@
+name: 问题反馈
+description: 帮助我们定位可复现的问题
+title: "[问题] "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+      description: 请填写应用版本或 Git 提交版本。
+      placeholder: 例如 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Windows 版本
+      placeholder: 例如 Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 新建项目
+        2. 导入……
+        3. 点击……
+        4. 出现……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: 素材信息和补充说明
+      description: 请说明视频/音频格式、分辨率、时长；可拖入截图或日志。请不要上传隐私素材。
+    validations:
+      required: false

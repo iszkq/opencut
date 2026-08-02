@@ -1,0 +1,82 @@
+name: Build Windows desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    name: Build portable and installer packages
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.18
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download FFmpeg release dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP\ffmpeg
+          $bin = Get-ChildItem $env:RUNNER_TEMP\ffmpeg -Directory -Recurse | Where-Object { Test-Path (Join-Path $_.FullName 'bin\ffmpeg.exe') } | Select-Object -First 1
+          if (-not $bin) { throw 'FFmpeg download did not contain bin/ffmpeg.exe' }
+          New-Item -ItemType Directory -Force -Path apps\web\tools\ffmpeg\bin | Out-Null
+          Copy-Item (Join-Path $bin.FullName 'bin\ffmpeg.exe') apps\web\tools\ffmpeg\bin\ffmpeg.exe
+          Copy-Item (Join-Path $bin.FullName 'bin\ffprobe.exe') apps\web\tools\ffmpeg\bin\ffprobe.exe
+          $license = Get-ChildItem $bin.FullName -File -Recurse | Where-Object { $_.Name -match '^(LICENSE|COPYING)' } | Select-Object -First 1
+          if (-not $license) { throw 'FFmpeg license file was not found' }
+          Copy-Item $license.FullName apps\web\tools\ffmpeg\LICENSE.txt
+
+      - name: Download offline subtitle model
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'sensevoice.tar.bz2'
+          Invoke-WebRequest 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2' -OutFile $archive
+          $extract = Join-Path $env:RUNNER_TEMP 'sensevoice'
+          New-Item -ItemType Directory -Force -Path $extract | Out-Null
+          tar -xf $archive -C $extract
+          $model = Get-ChildItem $extract -Filter 'model.int8.onnx' -File -Recurse | Select-Object -First 1
+          $tokens = Get-ChildItem $extract -Filter 'tokens.txt' -File -Recurse | Select-Object -First 1
+          if (-not $model -or -not $tokens) { throw 'SenseVoice archive did not contain model.int8.onnx and tokens.txt' }
+          New-Item -ItemType Directory -Force -Path apps\web\public\models\sensevoice | Out-Null
+          Copy-Item $model.FullName apps\web\public\models\sensevoice\model.int8.onnx
+          Copy-Item $tokens.FullName apps\web\public\models\sensevoice\tokens.txt
+
+      - name: Build Windows packages
+        shell: pwsh
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: bun run dist:win
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenCut-Windows-${{ github.ref_name }}
+          path: |
+            release/*.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*.exe

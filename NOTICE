@@ -1,0 +1,8 @@
+OpenCut 中文版 includes and modifies code from OpenCut.
+
+Upstream project: https://github.com/OpenCut-app/OpenCut
+Upstream copyright: Copyright (c) 2025-2026 OpenCut contributors
+Upstream license: MIT License (see LICENSE)
+
+The Windows release bundle also includes FFmpeg binaries. Their license text is
+distributed in the release bundle at resources/ffmpeg/LICENSE.txt.

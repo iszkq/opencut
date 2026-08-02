@@ -1,0 +1,29 @@
+name: Build verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-build:
+    name: Web build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.18
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+      - name: 验证发布元数据
+        run: bun -e "JSON.parse(await Bun.file('package.json').text()); console.log('package.json valid')"
+      - name: 构建 Web 应用
+        run: bun run build:web

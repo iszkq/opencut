@@ -1,0 +1,12 @@
+{
+  "name": "opencut-desktop",
+	"version": "0.4.0",
+	"description": "OpenCut 中文版桌面应用，内置本地 FFmpeg 导出",
+	"author": "OpenCut 中文版维护者",
+  "packageManager": "npm@11.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "dependencies": {
+    "is-number": "7.0.0"
+  }
+}
