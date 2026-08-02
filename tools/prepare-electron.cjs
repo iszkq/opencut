@@ -31,7 +31,15 @@ if (fs.existsSync(wasmSource)) {
 // cannot reliably archive that link, so materialize this required runtime
 // dependency inside the standalone folder before it is embedded in the app.
 const nextLink = path.join(standalone, "node_modules", "next");
-const nextSource = path.join(web, "node_modules", "next");
+// Bun may keep a workspace dependency inside the app's node_modules folder
+// (local nested install), or hoist it to the repository root (GitHub Actions
+// on Windows). Resolve both layouts so release builds are reproducible.
+const workspaceNext = path.join(web, "node_modules", "next");
+const rootNext = path.join(root, "node_modules", "next");
+const nextSource = fs.existsSync(workspaceNext) ? workspaceNext : rootNext;
+if (!fs.existsSync(nextSource)) {
+	throw new Error("Next.js runtime dependency is missing. Run bun install before packaging.");
+}
 const nextTarget = fs.realpathSync(nextSource);
 fs.rmSync(nextLink, { recursive: true, force: true });
 fs.cpSync(nextTarget, nextLink, {
