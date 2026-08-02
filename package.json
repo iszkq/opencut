@@ -15,7 +15,7 @@
     "test": "bun test",
     "verify:desktop-assets": "node tools/verify-desktop-assets.cjs",
     "build:desktop:web": "bun run build:web && node tools/prepare-electron.cjs",
-    "dist:win": "bun run verify:desktop-assets && bun run build:desktop:web && bunx electron-builder --win nsis portable",
+    "dist:win": "bun run verify:desktop-assets && bun run build:desktop:web && bunx electron-builder --win nsis portable --publish never",
     "dist:win:dir": "bun run verify:desktop-assets && bun run build:desktop:web && bunx electron-builder --win dir",
     "dev:web": "turbo run dev --filter=@opencut/web",
     "build:wasm": "wasm-pack build rust/wasm --target bundler --out-dir pkg",
@@ -81,14 +81,17 @@
     "compression": "store",
     "npmRebuild": false,
     "win": {
-      "target": ["nsis", "portable"],
-      "artifactName": "OpenCut-中文版-${version}-${arch}.${ext}"
+      "target": ["nsis", "portable"]
     },
     "nsis": {
+      "artifactName": "OpenCut-中文版-安装版-${version}-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "OpenCut-中文版-便携版-${version}-${arch}.${ext}"
     }
   }
 }
