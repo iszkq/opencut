@@ -84,14 +84,14 @@
       "target": ["nsis", "portable"]
     },
     "nsis": {
-      "artifactName": "OpenCut-中文版-安装版-${version}-${arch}.${ext}",
+      "artifactName": "OpenCut-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
     "portable": {
-      "artifactName": "OpenCut-中文版-便携版-${version}-${arch}.${ext}"
+      "artifactName": "OpenCut-Portable-${version}-${arch}.${ext}"
     }
   }
 }
