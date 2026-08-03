@@ -121,7 +121,8 @@ async function proxySpeech(request, env) {
 				data?.url,
 			].find((candidate) => typeof candidate === "string") || "";
 		const url = new URL(audioUrl);
-		if (url.protocol !== "https:") throw new Error("Invalid audio URL");
+		if (url.protocol !== "https:" && url.protocol !== "http:")
+			throw new Error("Invalid audio URL");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "unknown response";
 		return json(
