@@ -102,12 +102,14 @@ function resolveEffectPassGroups({
 	localTime,
 	width,
 	height,
+	duration,
 }: {
 	effects: Effect[] | undefined;
 	animations: VisualNodeParams["animations"];
 	localTime: number;
 	width: number;
 	height: number;
+	duration: number;
 }): EffectPass[][] {
 	return (effects ?? [])
 		.filter((effect) => effect.enabled)
@@ -125,6 +127,7 @@ function resolveEffectPassGroups({
 				width,
 				height,
 				localTime,
+				duration,
 			});
 		});
 }
@@ -181,6 +184,7 @@ function resolveVisualState({
 			localTime,
 			width: effectWidth,
 			height: effectHeight,
+			duration: params.duration,
 		}),
 	};
 }
@@ -368,6 +372,7 @@ function resolveTextNode({
 			localTime,
 			width: context.renderer.width,
 			height: context.renderer.height,
+			duration: node.params.duration,
 		}),
 		measuredText: measureTextElement({
 			element: node.params,
@@ -472,6 +477,7 @@ function resolveEffectLayerNode({
 		width: context.renderer.width,
 		height: context.renderer.height,
 		localTime: time - node.params.timeOffset,
+		duration: node.params.duration,
 	});
 	if (passes.length === 0) {
 		return null;

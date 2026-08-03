@@ -63,6 +63,7 @@ class EffectPreviewService {
 				effectParams: resolvedParams,
 				width: uniformDimensions?.width ?? size,
 				height: uniformDimensions?.height ?? size,
+				duration: 1,
 			});
 			const result = this.applyGpuEffect({
 				source,

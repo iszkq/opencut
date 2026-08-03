@@ -21,6 +21,7 @@ export interface EffectPassTemplate {
 		width: number;
 		height: number;
 		localTime?: number;
+		duration?: number;
 	}): Record<string, EffectUniformValue>;
 }
 
@@ -31,6 +32,7 @@ export interface EffectRendererConfig {
 		width: number;
 		height: number;
 		localTime?: number;
+		duration?: number;
 	}) => EffectPass[];
 }
 

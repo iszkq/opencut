@@ -23,11 +23,16 @@ function clamp({ value, min, max }: { value: number; min: number; max: number })
 function buildHandDrawPasses({
 	effectParams,
 	localTime,
+	duration,
 }: {
 	effectParams: Record<string, unknown>;
 	localTime?: number;
+	duration?: number;
 }): EffectPass[] {
-	const drawDuration = Math.max(numberParam({ params: effectParams, key: "drawDuration", fallback: 2.5 }), 0.1);
+	const requestedDuration = numberParam({ params: effectParams, key: "drawDuration", fallback: 0 });
+	const drawDuration = requestedDuration > 0
+		? requestedDuration
+		: Math.max(duration ?? 2.5, 0.1);
 	const progress = localTime == null ? 1 : clamp({ value: localTime / drawDuration, min: 0, max: 1 });
 
 	return [{
@@ -46,7 +51,7 @@ export const handDrawEffectDefinition: EffectDefinition = {
 	name: "手绘显现",
 	keywords: ["手绘", "素描", "涂鸦", "白板", "绘制", "线稿"],
 	params: [
-		{ key: "drawDuration", label: "绘制时长", type: "number", default: 2.5, min: 0.2, max: 10, step: 0.1, keyframable: false },
+		{ key: "drawDuration", label: "绘制时长（0=整段）", type: "number", default: 0, min: 0, max: 60, step: 0.1, keyframable: false },
 		{ key: "lineStrength", label: "线条强度", type: "number", default: 0.82, min: 0, max: 1, step: 0.01, unit: "percent" },
 		{ key: "colorDelay", label: "上色延迟", type: "number", default: 0.46, min: 0, max: 0.9, step: 0.01, unit: "percent" },
 		{ key: "roughness", label: "笔触粗糙度", type: "number", default: 0.65, min: 0, max: 1, step: 0.01, unit: "percent" },
