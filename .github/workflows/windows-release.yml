@@ -54,7 +54,28 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
-          Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile $zip
+          # gyan.dev occasionally returns a temporary 503 under load. Retry it
+          # first, then use the maintained GitHub build mirror so a transient
+          # third-party outage cannot prevent a tagged release from publishing.
+          $sources = @(
+            'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
+            'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip'
+          )
+          $downloaded = $false
+          foreach ($source in $sources) {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              try {
+                Invoke-WebRequest $source -OutFile $zip -MaximumRedirection 5
+                $downloaded = $true
+                break
+              } catch {
+                Remove-Item $zip -Force -ErrorAction SilentlyContinue
+                if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+              }
+            }
+            if ($downloaded) { break }
+          }
+          if (-not $downloaded) { throw 'Unable to download FFmpeg from all configured sources.' }
           Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP\ffmpeg
           $bin = Get-ChildItem $env:RUNNER_TEMP\ffmpeg -Directory -Recurse | Where-Object { Test-Path (Join-Path $_.FullName 'bin\ffmpeg.exe') } | Select-Object -First 1
           if (-not $bin) { throw 'FFmpeg download did not contain bin/ffmpeg.exe' }
