@@ -121,7 +121,7 @@ export function HandDrawRegionOverlay({
 
 	return (
 		<div
-			className="absolute inset-0 cursor-crosshair"
+			className="absolute inset-0 z-20 cursor-crosshair touch-none"
 			onPointerDown={handlePointerDown}
 			onPointerMove={handlePointerMove}
 			onPointerUp={handlePointerUp}

@@ -6,7 +6,6 @@ import { TransformHandles } from "./transform-handles";
 import { MaskHandles } from "./mask-handles";
 import { SnapGuides } from "./snap-guides";
 import { TextEditOverlay } from "./text-edit-overlay";
-import { usePropertiesStore } from "@/components/editor/panels/properties/stores/properties-store";
 import { useEditor } from "@/editor/use-editor";
 import { HandDrawRegionOverlay } from "./hand-draw-region-overlay";
 
@@ -15,7 +14,6 @@ export function PreviewInteractionOverlay() {
 	const editor = useEditor();
 	const viewport = usePreviewViewport();
 	const selectedElements = useEditor((e) => e.selection.getSelectedElements());
-	const activeTabPerType = usePropertiesStore((s) => s.activeTabPerType);
 
 	const selectedRef =
 		selectedElements.length === 1 ? selectedElements[0] : null;
@@ -32,8 +30,7 @@ export function PreviewInteractionOverlay() {
 	const isHandDrawRegionEditing =
 		activeElement?.type === "effect" &&
 		activeElement.effectType === "hand-draw" &&
-		activeElement.params.regionEditing === true &&
-		activeTabPerType.effect === "effects";
+		activeElement.params.regionEditing === true;
 
 	const {
 		onPointerDown,

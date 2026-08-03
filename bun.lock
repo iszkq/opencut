@@ -30,7 +30,7 @@
     },
     "apps/electron": {
       "name": "opencut-desktop",
-      "version": "1.0.1",
+      "version": "1.0.7",
       "dependencies": {
         "is-number": "7.0.0",
       },
