@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
 const { spawn, execFile } = require("node:child_process");
+const https = require("node:https");
 const net = require("node:net");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -12,10 +13,132 @@ let desktopRecognizer;
 const conversionSources = new Set();
 const DEFAULT_WEB_PORT = 43337;
 const WEB_PORT_CONFIG_NAME = "desktop-web-port.json";
+const UPDATE_REPOSITORY = { owner: "iszkq", repo: "opencut" };
 const execFileAsync = promisify(execFile);
 
 function integer(value, min, max) {
 	return Number.isInteger(value) && value >= min && value <= max ? value : null;
+}
+
+function compareVersions(left, right) {
+	const parse = (value) => String(value).replace(/^v/, "").split(".").map((part) => {
+		const number = Number.parseInt(part, 10);
+		return Number.isInteger(number) && number >= 0 ? number : null;
+	});
+	const leftParts = parse(left);
+	const rightParts = parse(right);
+	if (leftParts.some((part) => part === null) || rightParts.some((part) => part === null)) return null;
+	const length = Math.max(leftParts.length, rightParts.length);
+	for (let index = 0; index < length; index += 1) {
+		const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+		if (difference !== 0) return Math.sign(difference);
+	}
+	return 0;
+}
+
+function requestUrl(url, redirects = 0) {
+	return new Promise((resolve, reject) => {
+		const request = https.get(url, {
+			headers: {
+				Accept: "application/vnd.github+json",
+				"User-Agent": `${app.getName()}-${app.getVersion()}`,
+			},
+		}, (response) => {
+			const status = response.statusCode ?? 0;
+			if ([301, 302, 303, 307, 308].includes(status) && response.headers.location && redirects < 5) {
+				response.resume();
+				resolve(requestUrl(new URL(response.headers.location, url), redirects + 1));
+				return;
+			}
+			resolve(response);
+		});
+		request.once("error", reject);
+	});
+}
+
+async function fetchLatestRelease() {
+	const url = `https://api.github.com/repos/${UPDATE_REPOSITORY.owner}/${UPDATE_REPOSITORY.repo}/releases/latest`;
+	const response = await requestUrl(url);
+	if ((response.statusCode ?? 0) !== 200) {
+		response.resume();
+		throw new Error(`更新检查失败（HTTP ${response.statusCode ?? "未知"}）`);
+	}
+	const chunks = [];
+	let length = 0;
+	for await (const chunk of response) {
+		length += chunk.length;
+		if (length > 1024 * 1024) throw new Error("更新信息过大");
+		chunks.push(chunk);
+	}
+	return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function downloadInstaller({ url, version }) {
+	const directory = path.join(app.getPath("temp"), "opencut-updates");
+	await fsp.mkdir(directory, { recursive: true });
+	const destination = path.join(directory, `OpenCut-Setup-${version}-x64.exe`);
+	const temporaryPath = `${destination}.download`;
+	await fsp.rm(temporaryPath, { force: true });
+	const response = await requestUrl(url);
+	if ((response.statusCode ?? 0) !== 200) {
+		response.resume();
+		throw new Error(`更新下载失败（HTTP ${response.statusCode ?? "未知"}）`);
+	}
+	await new Promise((resolve, reject) => {
+		const output = fs.createWriteStream(temporaryPath);
+		const fail = (error) => {
+			response.destroy();
+			output.destroy();
+			reject(error);
+		};
+		response.once("error", fail);
+		output.once("error", fail);
+		output.once("finish", () => output.close(resolve));
+		response.pipe(output);
+	});
+	await fsp.rename(temporaryPath, destination);
+	return destination;
+}
+
+async function checkForUpdates({ parentWindow }) {
+	if (!app.isPackaged || process.platform !== "win32") return;
+	try {
+		const release = await fetchLatestRelease();
+		const version = String(release.tag_name || "").replace(/^v/, "");
+		if (release.draft || release.prerelease || compareVersions(version, app.getVersion()) !== 1) return;
+		const installer = Array.isArray(release.assets)
+			? release.assets.find((asset) => /^OpenCut-Setup-.+-x64\.exe$/i.test(String(asset.name || "")))
+			: null;
+		if (!installer?.browser_download_url) return;
+
+		const choice = await dialog.showMessageBox(parentWindow, {
+			type: "info",
+			title: "发现新版本",
+			message: `OpenCut ${version} 已发布。`,
+			detail: "现在下载更新包。下载完成后可立即安装，或下次自行安装。",
+			buttons: ["下载更新", "暂不更新"],
+			defaultId: 0,
+			cancelId: 1,
+		});
+		if (choice.response !== 0) return;
+
+		const installerPath = await downloadInstaller({ url: installer.browser_download_url, version });
+		const installChoice = await dialog.showMessageBox(parentWindow, {
+			type: "info",
+			title: "更新已下载",
+			message: "更新包已下载完成。",
+			detail: "选择“立即安装”会关闭 OpenCut 并启动安装程序。",
+			buttons: ["立即安装", "稍后安装"],
+			defaultId: 0,
+			cancelId: 1,
+		});
+		if (installChoice.response !== 0) return;
+		const installerProcess = spawn(installerPath, [], { detached: true, stdio: "ignore" });
+		installerProcess.unref();
+		app.quit();
+	} catch (error) {
+		console.warn("Update check failed", error);
+	}
 }
 
 function toFilterPath(filePath) {
@@ -622,11 +745,15 @@ async function createWindow() {
 		return { action: "deny" };
 	});
 	await mainWindow.loadURL(url);
+	return mainWindow;
 }
 
 app
 	.whenReady()
-	.then(createWindow)
+	.then(async () => {
+		const mainWindow = await createWindow();
+		setTimeout(() => void checkForUpdates({ parentWindow: mainWindow }), 5_000);
+	})
 	.catch((error) => {
 		dialog.showErrorBox("OpenCut 启动失败", error.stack || error.message);
 		app.quit();
