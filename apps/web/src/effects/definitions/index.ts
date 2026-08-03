@@ -1,11 +1,13 @@
 import { effectsRegistry } from "../registry";
 import { blurEffectDefinition, createBlurEffectDefinition } from "./blur";
+import { handDrawEffectDefinition } from "./hand-draw";
 
 const defaultEffects = [
 	blurEffectDefinition,
 	createBlurEffectDefinition({ type: "blur-soft", name: "柔焦", intensity: 18 }),
 	createBlurEffectDefinition({ type: "blur-background", name: "背景虚化", intensity: 34 }),
 	createBlurEffectDefinition({ type: "blur-strong", name: "强力模糊", intensity: 62 }),
+	handDrawEffectDefinition,
 ];
 
 export function registerDefaultEffects(): void {

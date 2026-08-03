@@ -28,6 +28,27 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build and link local WASM package
+        shell: pwsh
+        run: |
+          bun run build:wasm
+          Push-Location rust\wasm\pkg
+          bun link
+          Pop-Location
+          Push-Location apps\web
+          bun link opencut-wasm
+          Pop-Location
+
       - name: Download FFmpeg release dependency
         shell: pwsh
         run: |
