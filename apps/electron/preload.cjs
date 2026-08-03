@@ -5,6 +5,14 @@ contextBridge.exposeInMainWorld("opencutDesktop", {
 	selectConversionFiles: () => ipcRenderer.invoke("opencut:select-conversion-files"),
 	convertMedia: (payload) => ipcRenderer.invoke("opencut:convert-media", payload),
 	transcribeAudio: ({ audio, language }) => ipcRenderer.invoke("opencut:transcribe-audio", { audio, language }),
+	ttsStatus: () => ipcRenderer.invoke("opencut:tts-status"),
+	downloadTtsModel: ({ mirrorUrl } = {}) => ipcRenderer.invoke("opencut:tts-download-model", { mirrorUrl }),
+	generateTts: ({ text, speakerId, speed }) =>
+		ipcRenderer.invoke("opencut:tts-generate", { text, speakerId, speed }),
+	cloudTtsStatus: () => ipcRenderer.invoke("opencut:tts-cloud-status"),
+	saveCloudTtsApiKey: ({ apiKey }) => ipcRenderer.invoke("opencut:tts-cloud-save-key", { apiKey }),
+	generateCloudTts: ({ text, model, voice }) =>
+		ipcRenderer.invoke("opencut:tts-cloud-generate", { text, model, voice }),
 	exportNativeVideo: ({ clips, ...payload }) => {
 		const resolvedClips = clips.map(({ file, ...clip }) => ({
 			...clip,

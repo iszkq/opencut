@@ -22,9 +22,23 @@ export class IndexedDBAdapter<T> implements StorageAdapter<T> {
 	private async getDB(): Promise<IDBDatabase> {
 		return new Promise((resolve, reject) => {
 			const request = indexedDB.open(this.dbName, this.version);
+			let settled = false;
+			const timeout = window.setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				reject(new Error(`项目库“${this.dbName}”打开超时，请关闭其他 OpenCut 窗口后重试。`));
+			}, 10_000);
+			const settle = (callback: () => void) => {
+				if (settled) return;
+				settled = true;
+				window.clearTimeout(timeout);
+				callback();
+			};
 
-			request.onerror = () => reject(request.error);
-			request.onsuccess = () => resolve(request.result);
+			request.onerror = () => settle(() => reject(request.error));
+			request.onblocked = () =>
+				settle(() => reject(new Error(`项目库“${this.dbName}”正被另一个 OpenCut 窗口占用。`)));
+			request.onsuccess = () => settle(() => resolve(request.result));
 
 			request.onupgradeneeded = (event) => {
 				const db = (event.target as IDBOpenDBRequest).result;
@@ -123,5 +137,8 @@ export async function deleteDatabase({
 		const request = indexedDB.deleteDatabase(dbName);
 		request.onsuccess = () => resolve();
 		request.onerror = () => reject(request.error);
+		// This obsolete metadata database can be held by an older window. It is
+		// safe to defer its cleanup; waiting for it would block project loading.
+		request.onblocked = () => resolve();
 	});
 }

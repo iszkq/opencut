@@ -317,11 +317,16 @@ function EffectSection({
 							<div key={param.key} className="flex flex-col gap-3.5">
 								<div className="px-4">
 									<PropertyParamField
-										param={param}
-										value={renderParams[param.key] ?? param.default}
-										onPreview={previewParam(param.key)}
-										onCommit={onCommit}
-									/>
+											param={param}
+											value={renderParams[param.key] ?? param.default}
+											onPreview={previewParam(param.key)}
+											onCommit={onCommit}
+										/>
+										{effect.type === "hand-draw" && param.key === "colorDelay" ? (
+											<HandDrawParamHint paramKey={param.key} />
+										) : effect.type === "hand-draw" ? (
+											<HandDrawParamHint paramKey={param.key} />
+										) : null}
 								</div>
 								<Separator />
 							</div>
@@ -336,6 +341,18 @@ function EffectSection({
 			</SectionContent>
 		</Section>
 	);
+}
+
+function HandDrawParamHint({ paramKey }: { paramKey: string }) {
+	const hint =
+		paramKey === "lineStrength"
+			? "范围：0%–100%。数值越高，线稿越清晰、越浓；建议 55%–80%。"
+			: paramKey === "colorDelay"
+				? "范围：0%–90%。0% 表示笔尖经过即上色；46% 表示当前分区画到约一半后才渐进上色。分区画完时会自动补全该分区颜色。"
+				: paramKey === "roughness"
+					? "范围：0%–100%。数值越低线条越平滑；数值越高越有手绘颗粒感；建议 35%–70%。"
+					: null;
+	return hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null;
 }
 
 function HandDrawRegionsSection({

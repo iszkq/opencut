@@ -11,6 +11,7 @@ import {
 } from "@/effects/hand-draw-regions";
 
 type CanvasPoint = { x: number; y: number };
+const FALLBACK_CANVAS_SIZE = { width: 1920, height: 1080 };
 
 function directionFromOrder({ value }: { value: unknown }): HandDrawDirection {
 	return value === "right-to-left" ||
@@ -29,10 +30,15 @@ export function HandDrawRegionOverlay({
 }) {
 	const editor = useEditor();
 	const viewport = usePreviewViewport();
-	const canvasSize = useEditor((e) => e.project.getActive().settings.canvasSize);
+	// Selection changes can briefly happen while a project is being restored.
+	// The editing overlay must never take down the entire editor in that gap.
+	const canvasSize = useEditor(
+		(e) => e.project.getActive()?.settings.canvasSize ?? FALLBACK_CANVAS_SIZE,
+	);
 	const [dragStart, setDragStart] = useState<CanvasPoint | null>(null);
 	const [dragCurrent, setDragCurrent] = useState<CanvasPoint | null>(null);
-	const regions = parseHandDrawRegions({ value: element.params.drawRegions });
+	const effectParams = element.params ?? {};
+	const regions = parseHandDrawRegions({ value: effectParams.drawRegions });
 
 	const pointFromEvent = (event: React.PointerEvent): CanvasPoint | null => {
 		const point = viewport.screenToCanvas({
@@ -53,7 +59,7 @@ export function HandDrawRegionOverlay({
 					trackId,
 					elementId: element.id,
 					patch: {
-						params: { ...element.params, drawRegions: nextValue },
+						params: { ...effectParams, drawRegions: nextValue },
 					},
 				},
 			],
@@ -97,7 +103,7 @@ export function HandDrawRegionOverlay({
 				y: top / canvasSize.height,
 				width: width / canvasSize.width,
 				height: height / canvasSize.height,
-				direction: directionFromOrder({ value: element.params.drawOrder }),
+				direction: directionFromOrder({ value: effectParams.drawOrder }),
 			},
 		];
 		updateRegions(serializeHandDrawRegions({ regions: nextRegions }));

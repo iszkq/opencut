@@ -11,13 +11,14 @@ import {
 	TextIcon,
 	Settings01Icon,
 	SlidersHorizontalIcon,
-	ColorsIcon,
+	AiVoiceGeneratorIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 
 export const TAB_KEYS = [
 	"media",
 	"sounds",
+	"dubbing",
 	"text",
 	"stickers",
 	"effects",
@@ -30,10 +31,13 @@ export const TAB_KEYS = [
 export type Tab = (typeof TAB_KEYS)[number];
 
 const createHugeiconsIcon =
-	({ icon }: { icon: IconSvgElement }) =>
-	({ className }: { className?: string }) => (
-		<HugeiconsIcon icon={icon} className={className} />
-	);
+	({ icon }: { icon: IconSvgElement }) => {
+		const AssetPanelIcon = ({ className }: { className?: string }) => (
+			<HugeiconsIcon icon={icon} className={className} />
+		);
+		AssetPanelIcon.displayName = "AssetPanelIcon";
+		return AssetPanelIcon;
+	};
 
 export const tabs = {
 	media: {
@@ -43,6 +47,10 @@ export const tabs = {
 	sounds: {
 		icon: createHugeiconsIcon({ icon: HeadphonesIcon }),
 		label: "音频",
+	},
+	dubbing: {
+		icon: createHugeiconsIcon({ icon: AiVoiceGeneratorIcon }),
+		label: "角色配音",
 	},
 	text: {
 		icon: createHugeiconsIcon({ icon: TextIcon }),

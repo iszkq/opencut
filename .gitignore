@@ -21,6 +21,7 @@ apps/web/public/models/
 
 .env*
 !*.env.example
+apps/electron/tts-shared-key.cjs
 
 # cursor
 bun.lockb

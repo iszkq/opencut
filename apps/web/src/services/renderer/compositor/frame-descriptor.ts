@@ -295,14 +295,23 @@ async function collectVisualSourceNode({
 			contentHash: `hand-draw:${identityKey(source)}:${sourceWidth}x${sourceHeight}:${JSON.stringify(handDrawPass.uniforms)}`,
 			width: sourceWidth,
 			height: sourceHeight,
-			draw: (ctx) =>
-				drawHandDrawReveal({
-					ctx,
-					source,
-					width: sourceWidth,
-					height: sourceHeight,
-					pass: handDrawPass,
-				}),
+			draw: (ctx) => {
+				try {
+					drawHandDrawReveal({
+						ctx,
+						source,
+						width: sourceWidth,
+						height: sourceHeight,
+						pass: handDrawPass,
+					});
+				} catch (error) {
+					// A malformed media frame or an unavailable Canvas feature must only
+					// skip this effect for the current frame, never crash the editor.
+					console.warn("手绘显现本帧渲染失败，已回退原画面", error);
+					ctx.clearRect(0, 0, sourceWidth, sourceHeight);
+					ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+				}
+			},
 		});
 	} else {
 		textures.set(textureId, {
@@ -409,6 +418,15 @@ function drawHandDrawReveal({
 		value: progress,
 	}) ** 1.85;
 	const visiblePointCount = Math.ceil(drawingProgress * sketch.totalPoints);
+	const regionSpans = getDrawRegionSpans({
+		strokes: sketch.strokes,
+		width,
+		height,
+		regions: drawRegions,
+	});
+	const completedRegions = regionSpans
+		.filter((span) => visiblePointCount >= span.endPoint)
+		.map((span) => span.region);
 	const brushWidth = Math.max(
 		1.3,
 		(Math.min(width, height) / 420) * (1 + roughness * 0.45),
@@ -435,21 +453,43 @@ function drawHandDrawReveal({
 	// The outline is drawn first. A wide, semi-transparent crayon follows the
 	// same already-traced path later, so the picture gains colour progressively
 	// instead of the original bitmap suddenly fading in.
-	const colourProgress =
-		colorDelay >= 1 ? 0 : clampUnit((progress - colorDelay) / (1 - colorDelay));
-	if (colourProgress > 0) {
-		const paintedPoints = Math.ceil(
-			drawingProgress * sketch.totalPoints * colourProgress,
-		);
+	const regionPaintRanges = getRegionPaintRanges({
+		spans: regionSpans,
+		visiblePointCount,
+		colorDelay,
+	});
+	const paintedPoints =
+		regionSpans.length === 0
+			? getPaintedPointCount({
+					visiblePointCount,
+					drawingProgress,
+					totalPoints: sketch.totalPoints,
+					colorDelay,
+				})
+			: 0;
+	if (paintedPoints > 0 || regionPaintRanges.length > 0) {
 		// The colour brush starts narrow, then opens up only around the strokes
 		// which are already complete. This is the key distinction from a global
 		// crossfade: an unfinished area remains white even near the end.
-		const paintMaskCanvas = updateProgressMask({
-			sketch,
-			kind: "paint",
-			pointCount: paintedPoints,
-			lineWidth: Math.max(brushWidth * 8, Math.min(width, height) / 80),
-		});
+		// Keep the colour brush narrower than the graphite outline. A very broad
+		// mask makes the first delayed colour frame look like a sudden flood over
+		// the already-drawn half of an unsegmented image.
+		const paintLineWidth = Math.max(
+			brushWidth * 3.5,
+			Math.min(width, height) / 155,
+		);
+		const paintMaskCanvas = regionPaintRanges.length > 0
+			? createPointRangeMask({
+					sketch,
+					ranges: regionPaintRanges,
+					lineWidth: paintLineWidth,
+				})
+			: updateProgressMask({
+					sketch,
+					kind: "paint",
+					pointCount: paintedPoints,
+					lineWidth: paintLineWidth,
+				});
 		const { canvas: colourCanvas, context: colourCtx } = createCanvasSurface({
 			width,
 			height,
@@ -462,6 +502,18 @@ function drawHandDrawReveal({
 		revealCtx.globalCompositeOperation = "source-over";
 		revealCtx.drawImage(colourCanvas, 0, 0);
 	}
+	// A finished user-defined section must always be fully coloured. The delay
+	// controls the colour following the pen *within* the section; it must never
+	// make a completed section wait for a later section or the end of the effect.
+	if (completedRegions.length > 0) {
+		drawCompletedRegionColour({
+			ctx: revealCtx,
+			source,
+			width,
+			height,
+			regions: completedRegions,
+		});
+	}
 	ctx.fillStyle = "#ffffff";
 	ctx.fillRect(0, 0, width, height);
 	ctx.drawImage(revealCanvas, 0, 0);
@@ -473,6 +525,165 @@ function drawHandDrawReveal({
 			opacity: 1 - smoothStep({ edge0: 0.92, edge1: 0.98, value: progress }),
 		});
 	}
+}
+
+function getPaintedPointCount({
+	visiblePointCount,
+	drawingProgress,
+	totalPoints,
+	colorDelay,
+}: {
+	visiblePointCount: number;
+	drawingProgress: number;
+	totalPoints: number;
+	colorDelay: number;
+}): number {
+	// With no delay, colour must follow the pen exactly. Previously this value
+	// was multiplied by progress a second time, which made colour lag behind
+	// even when the control was set to zero.
+	if (colorDelay <= 0.001) return visiblePointCount;
+
+	const delayedProgress = smoothStep({
+		edge0: 0,
+		edge1: 1,
+		value:
+			(drawingProgress - colorDelay) / Math.max(0.001, 1 - colorDelay),
+	});
+	const delayedPointCount = Math.ceil(delayedProgress * totalPoints);
+
+	// For a positive delay, keep colour visibly behind the pen. Completed
+	// user-defined regions are filled separately below; without regions the
+	// source remains a delayed pencil-colour trail instead of jumping colour
+	// forward at every tiny contour.
+	return Math.min(visiblePointCount, delayedPointCount, totalPoints);
+}
+
+type DrawRegionSpan = {
+	region: HandDrawRegion;
+	startPoint: number;
+	endPoint: number;
+};
+
+function getDrawRegionSpans({
+	strokes,
+	width,
+	height,
+	regions,
+}: {
+	strokes: PencilStroke[];
+	width: number;
+	height: number;
+	regions: HandDrawRegion[];
+}): DrawRegionSpan[] {
+	if (regions.length === 0) return [];
+
+	const spanByRegionOrder = new Map<number, DrawRegionSpan>();
+	let offset = 0;
+	for (const stroke of strokes) {
+		const startPoint = offset;
+		offset += stroke.points.length;
+		const region = findDrawRegion({ stroke, width, height, regions });
+		if (!region) continue;
+		const previous = spanByRegionOrder.get(region.order);
+		spanByRegionOrder.set(region.order, {
+			region,
+			startPoint: previous?.startPoint ?? startPoint,
+			endPoint: offset,
+		});
+	}
+	return regions.flatMap((region) => {
+		const span = spanByRegionOrder.get(region.order);
+		return span ? [span] : [];
+	});
+}
+
+function getRegionPaintRanges({
+	spans,
+	visiblePointCount,
+	colorDelay,
+}: {
+	spans: DrawRegionSpan[];
+	visiblePointCount: number;
+	colorDelay: number;
+}): Array<{ startPoint: number; endPoint: number }> {
+	// Rebuild every started region on each frame. Rendering only the currently
+	// active region made earlier, partially coloured regions revert to pencil
+	// lines as soon as the pen entered the next region.
+	return spans.flatMap((span) => {
+		const spanLength = span.endPoint - span.startPoint;
+		if (spanLength < 1) return [];
+		const localDrawingProgress = clampUnit(
+			(visiblePointCount - span.startPoint) / spanLength,
+		);
+		const localColourProgress =
+			colorDelay <= 0.001
+				? localDrawingProgress
+				: clampUnit(
+						(localDrawingProgress - colorDelay) /
+							Math.max(0.001, 1 - colorDelay),
+					);
+		const endPoint =
+			span.startPoint + Math.ceil(spanLength * localColourProgress);
+		return endPoint > span.startPoint
+			? [{ startPoint: span.startPoint, endPoint }]
+			: [];
+	});
+}
+
+function createPointRangeMask({
+	sketch,
+	ranges,
+	lineWidth,
+}: {
+	sketch: PencilSketchCacheEntry;
+	ranges: Array<{ startPoint: number; endPoint: number }>;
+	lineWidth: number;
+}): OffscreenCanvas {
+	const { canvas, context } = createCanvasSurface({
+		width: sketch.width,
+		height: sketch.height,
+	});
+	context.strokeStyle = "white";
+	context.lineCap = "round";
+	context.lineJoin = "round";
+	context.lineWidth = lineWidth;
+	for (const range of ranges) {
+		drawStrokePointRange({
+			ctx: context,
+			strokes: sketch.strokes,
+			startPoint: range.startPoint,
+			endPoint: range.endPoint,
+		});
+	}
+	return canvas;
+}
+
+function drawCompletedRegionColour({
+	ctx,
+	source,
+	width,
+	height,
+	regions,
+}: {
+	ctx: OffscreenCanvasRenderingContext2D;
+	source: CanvasImageSource;
+	width: number;
+	height: number;
+	regions: HandDrawRegion[];
+}) {
+	ctx.save();
+	ctx.beginPath();
+	for (const region of regions) {
+		ctx.rect(
+			region.x * width,
+			region.y * height,
+			region.width * width,
+			region.height * height,
+		);
+	}
+	ctx.clip();
+	ctx.drawImage(source, 0, 0, width, height);
+	ctx.restore();
 }
 
 function getPencilSketch({

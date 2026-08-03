@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain, safeStorage } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const https = require("node:https");
 const net = require("node:net");
@@ -9,7 +9,10 @@ const os = require("node:os");
 const { promisify } = require("node:util");
 
 let webServer;
+let mainWindow;
 let desktopRecognizer;
+let desktopTts;
+let ttsDownloadPromise;
 const conversionSources = new Set();
 const DEFAULT_WEB_PORT = 43337;
 const WEB_PORT_CONFIG_NAME = "desktop-web-port.json";
@@ -53,6 +56,20 @@ function requestUrl(url, redirects = 0) {
 			resolve(response);
 		});
 		request.once("error", reject);
+	});
+}
+
+function isLocalProxyAvailable() {
+	return new Promise((resolve) => {
+		const socket = net.connect({ host: "127.0.0.1", port: 7897 });
+		const done = (available) => {
+			socket.destroy();
+			resolve(available);
+		};
+		socket.setTimeout(350);
+		socket.once("connect", () => done(true));
+		socket.once("timeout", () => done(false));
+		socket.once("error", () => done(false));
 	});
 }
 
@@ -330,6 +347,370 @@ async function transcribeDesktopAudio(payload) {
 }
 
 ipcMain.handle("opencut:transcribe-audio", async (_event, payload) => transcribeDesktopAudio(payload));
+
+const TTS_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2";
+const TTS_MODEL_FILE = "kokoro-int8-multi-lang-v1_1.tar.bz2";
+const CLOUD_TTS_ENDPOINT = "https://aihubmix.com/v1/audio/speech";
+const CLOUD_TTS_MODELS = new Set([
+	"qwen-audio-3.0-tts-flash",
+	"qwen-audio-3.0-tts-plus",
+	"gemini-2.5-flash-preview-tts",
+	"gemini-2.5-pro-preview-tts",
+	"gpt-4o-mini-tts",
+]);
+const sharedCloudTtsUsage = { date: "", characters: 0, lastRequestAt: 0 };
+
+function getTtsModelsDirectory() {
+	return path.join(app.getPath("userData"), "models", "kokoro-int8-multi-lang-v1_1");
+}
+
+function getCloudTtsKeyPath() {
+	return path.join(app.getPath("userData"), "credentials", "aihubmix-tts.key");
+}
+
+function getBundledCloudTtsApiKey() {
+	try {
+		// This file is generated only on the release machine and intentionally
+		// ignored by Git. Obfuscation is a small abuse deterrent, not a secret
+		// boundary; production paid keys should use a Worker instead.
+		const { encodedKey, mask } = require("./tts-shared-key.cjs");
+		const encrypted = Buffer.from(encodedKey, "base64");
+		const maskBytes = Buffer.from(mask, "utf8");
+		if (!encrypted.length || !maskBytes.length) return "";
+		return Buffer.from(encrypted.map((byte, index) => byte ^ maskBytes[index % maskBytes.length])).toString("utf8").trim();
+	} catch {
+		return "";
+	}
+}
+
+function getCloudTtsApiKey() {
+	try {
+		if (safeStorage.isEncryptionAvailable() && fs.existsSync(getCloudTtsKeyPath())) {
+			return safeStorage.decryptString(fs.readFileSync(getCloudTtsKeyPath()));
+		}
+	} catch {
+		// Use the release key below when a local override is damaged.
+	}
+	return getBundledCloudTtsApiKey();
+}
+
+function isUsingBundledCloudTtsKey() {
+	return !fs.existsSync(getCloudTtsKeyPath()) && Boolean(getBundledCloudTtsApiKey());
+}
+
+function enforceSharedCloudTtsLimit(text) {
+	if (!isUsingBundledCloudTtsKey()) return;
+	const today = new Date().toISOString().slice(0, 10);
+	if (sharedCloudTtsUsage.date !== today) {
+		sharedCloudTtsUsage.date = today;
+		sharedCloudTtsUsage.characters = 0;
+	}
+	if (Date.now() - sharedCloudTtsUsage.lastRequestAt < 1_500) {
+		throw new Error("免费共享配音请求过快，请稍后再试。");
+	}
+	if (text.length > 500 || sharedCloudTtsUsage.characters + text.length > 20_000) {
+		throw new Error("免费共享配音每次最多 500 字、每天最多 20000 字；可在设置中使用自己的 API Key 获得更高额度。");
+	}
+	sharedCloudTtsUsage.lastRequestAt = Date.now();
+	sharedCloudTtsUsage.characters += text.length;
+}
+
+function detectGeneratedAudioFormat(bytes) {
+	if (bytes.subarray(0, 4).toString("ascii") === "RIFF") return { extension: "wav", mimeType: "audio/wav" };
+	if (bytes.subarray(0, 3).toString("ascii") === "ID3" || bytes[0] === 0xff) return { extension: "mp3", mimeType: "audio/mpeg" };
+	if (bytes.subarray(0, 4).toString("ascii") === "OggS") return { extension: "ogg", mimeType: "audio/ogg" };
+	return { extension: "mp3", mimeType: "audio/mpeg" };
+}
+
+async function saveCloudTtsApiKey(value) {
+	const apiKey = String(value || "").trim();
+	if (!safeStorage.isEncryptionAvailable()) {
+		throw new Error("当前系统无法安全保存 API Key，请检查 Windows 凭据加密服务。");
+	}
+	if (apiKey.length < 16 || apiKey.length > 500) throw new Error("API Key 格式无效。");
+	const filePath = getCloudTtsKeyPath();
+	await fsp.mkdir(path.dirname(filePath), { recursive: true });
+	await fsp.writeFile(filePath, safeStorage.encryptString(apiKey));
+	return { configured: true };
+}
+
+async function hasTtsModel() {
+	const directory = getTtsModelsDirectory();
+	try {
+		await Promise.all([
+			fsp.access(path.join(directory, "voices.bin")),
+			fsp.access(path.join(directory, "tokens.txt")),
+		]);
+		return fs.existsSync(path.join(directory, "model.int8.onnx")) || fs.existsSync(path.join(directory, "model.onnx"));
+	} catch {
+		return false;
+	}
+}
+
+async function downloadToFile({ url, destination }) {
+	// A common Windows desktop proxy listens on 7897. When present, use it for
+	// large GitHub model downloads; otherwise retain the normal direct download.
+	if (process.platform === "win32" && await isLocalProxyAvailable()) {
+		await execFileAsync("curl.exe", [
+			"--proxy", "http://127.0.0.1:7897", "--fail", "--location", "--retry", "2",
+			"--output", destination, url,
+		], { windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+		return;
+	}
+	const response = await requestUrl(url);
+	if ((response.statusCode ?? 0) !== 200) {
+		response.resume();
+		throw new Error(`离线音色包下载失败（HTTP ${response.statusCode ?? "未知"}）。`);
+	}
+	await new Promise((resolve, reject) => {
+		const output = fs.createWriteStream(destination);
+		const fail = (error) => {
+			response.destroy();
+			output.destroy();
+			reject(error);
+		};
+		response.once("error", fail);
+		output.once("error", fail);
+		output.once("finish", () => output.close(resolve));
+		response.pipe(output);
+	});
+}
+
+async function findKokoroModelDirectory(directory, depth = 0) {
+	if (depth > 4) return null;
+	try {
+		const entries = await fsp.readdir(directory, { withFileTypes: true });
+		const names = new Set(entries.filter((entry) => entry.isFile()).map((entry) => entry.name));
+		if ((names.has("model.int8.onnx") || names.has("model.onnx")) && names.has("voices.bin") && names.has("tokens.txt")) return directory;
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const found = await findKokoroModelDirectory(path.join(directory, entry.name), depth + 1);
+			if (found) return found;
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+function normalizeTtsMirrorUrl(value) {
+	if (typeof value !== "string" || !value.trim()) return null;
+	try {
+		const url = new URL(value.trim());
+		return url.protocol === "https:" ? url.toString() : null;
+	} catch {
+		return null;
+	}
+}
+
+async function downloadDesktopTtsModel(payload) {
+	if (await hasTtsModel()) return { ready: true, downloaded: false };
+	if (ttsDownloadPromise) return ttsDownloadPromise;
+	ttsDownloadPromise = (async () => {
+		const parent = path.dirname(getTtsModelsDirectory());
+		const temporaryDirectory = await fsp.mkdtemp(path.join(app.getPath("temp"), "opencut-tts-"));
+		try {
+			const archivePath = path.join(temporaryDirectory, TTS_MODEL_FILE);
+			const extractedDirectory = path.join(temporaryDirectory, "extracted");
+			await fsp.mkdir(extractedDirectory, { recursive: true });
+			const mirrorUrl = normalizeTtsMirrorUrl(payload?.mirrorUrl);
+			const sources = [...new Set([mirrorUrl, TTS_MODEL_URL].filter(Boolean))];
+			let lastError;
+			for (const url of sources) {
+				try {
+					await fsp.rm(archivePath, { force: true });
+					await downloadToFile({ url, destination: archivePath });
+					lastError = null;
+					break;
+				} catch (error) {
+					lastError = error;
+				}
+			}
+			if (lastError) throw new Error("音色包下载失败，请检查资源镜像或网络后重试。", { cause: lastError });
+			await execFileAsync("tar.exe", ["-xjf", archivePath, "-C", extractedDirectory], {
+				windowsHide: true,
+				maxBuffer: 4 * 1024 * 1024,
+			});
+			const source = await findKokoroModelDirectory(extractedDirectory);
+			if (!source) throw new Error("离线音色包内容不完整，请重新下载。");
+			await fsp.rm(getTtsModelsDirectory(), { recursive: true, force: true });
+			await fsp.mkdir(parent, { recursive: true });
+			await fsp.cp(source, getTtsModelsDirectory(), { recursive: true });
+			desktopTts?.free?.();
+			desktopTts = null;
+			return { ready: true, downloaded: true };
+		} finally {
+			await fsp.rm(temporaryDirectory, { recursive: true, force: true });
+		}
+	})();
+	try {
+		return await ttsDownloadPromise;
+	} finally {
+		ttsDownloadPromise = null;
+	}
+}
+
+function getDesktopTts() {
+	if (desktopTts) return desktopTts;
+	const directory = getTtsModelsDirectory();
+	const sherpa = require("sherpa-onnx-node");
+	const model = fs.existsSync(path.join(directory, "model.int8.onnx"))
+		? path.join(directory, "model.int8.onnx")
+		: path.join(directory, "model.onnx");
+	desktopTts = new sherpa.OfflineTts({
+		model: {
+			kokoro: {
+				model,
+				voices: path.join(directory, "voices.bin"),
+				tokens: path.join(directory, "tokens.txt"),
+				dataDir: path.join(directory, "espeak-ng-data"),
+				lexicon: ["lexicon-us-en.txt", "lexicon-zh.txt"]
+					.map((file) => path.join(directory, file))
+					.filter((file) => fs.existsSync(file))
+					.join(","),
+				lang: "zh",
+			},
+			numThreads: Math.max(1, Math.min(4, os.cpus().length || 1)),
+			debug: false,
+			provider: "cpu",
+		},
+		maxNumSentences: 1,
+	});
+	return desktopTts;
+}
+
+function wavFromFloat32({ samples, sampleRate }) {
+	const buffer = Buffer.alloc(44 + samples.length * 2);
+	buffer.write("RIFF", 0, "ascii");
+	buffer.writeUInt32LE(36 + samples.length * 2, 4);
+	buffer.write("WAVEfmt ", 8, "ascii");
+	buffer.writeUInt32LE(16, 16);
+	buffer.writeUInt16LE(1, 20);
+	buffer.writeUInt16LE(1, 22);
+	buffer.writeUInt32LE(sampleRate, 24);
+	buffer.writeUInt32LE(sampleRate * 2, 28);
+	buffer.writeUInt16LE(2, 32);
+	buffer.writeUInt16LE(16, 34);
+	buffer.write("data", 36, "ascii");
+	buffer.writeUInt32LE(samples.length * 2, 40);
+	for (let index = 0; index < samples.length; index += 1) {
+		const sample = Math.max(-1, Math.min(1, samples[index]));
+		buffer.writeInt16LE(Math.round(sample * (sample < 0 ? 32768 : 32767)), 44 + index * 2);
+	}
+	return buffer;
+}
+
+async function generateDesktopTts(payload) {
+	if (!(await hasTtsModel())) throw new Error("请先下载离线音色包。");
+	const text = String(payload?.text || "").trim();
+	if (!text) throw new Error("请输入需要配音的文字。");
+	if (text.length > 2000) throw new Error("单次配音最多支持 2000 个字符，请分段生成。");
+	const speakerId = integer(Number(payload?.speakerId), 0, 102);
+	const speed = Number(payload?.speed);
+	if (speakerId === null || !Number.isFinite(speed) || speed < 0.7 || speed > 1.3) {
+		throw new Error("角色音色或语速设置无效。");
+	}
+	const sherpa = require("sherpa-onnx-node");
+	const audio = await getDesktopTts().generateAsync({
+		text,
+		// Electron's main process deliberately rejects native external buffers.
+		// Ask sherpa-onnx to copy the samples into a regular JavaScript buffer
+		// instead, so the native TTS engine remains compatible with packaged apps.
+		enableExternalBuffer: false,
+		generationConfig: new sherpa.GenerationConfig({ sid: speakerId, speed, silenceScale: 0.2 }),
+	});
+	if (!audio?.samples?.length || !audio.sampleRate) throw new Error("没有生成可用音频，请换一个角色音色后重试。");
+	const wav = wavFromFloat32(audio);
+	const outputDirectory = path.join(app.getPath("userData"), "generated-audio");
+	await fsp.mkdir(outputDirectory, { recursive: true });
+	const name = `角色配音-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`;
+	const outputPath = path.join(outputDirectory, name);
+	await fsp.writeFile(outputPath, wav);
+	return {
+		name,
+		base64: wav.toString("base64"),
+		duration: audio.samples.length / audio.sampleRate,
+		path: outputPath,
+	};
+}
+
+async function generateCloudTts(payload) {
+	const apiKey = getCloudTtsApiKey();
+	if (!apiKey) throw new Error("请先保存 AIHUBMIX API Key。");
+	const text = String(payload?.text || "").trim();
+	const model = String(payload?.model || "");
+	const voice = String(payload?.voice || "").trim();
+	if (!text) throw new Error("请输入需要配音的文字。");
+	if (text.length > 2000) throw new Error("单次配音最多支持 2000 个字符，请分段生成。");
+	if (!CLOUD_TTS_MODELS.has(model)) throw new Error("不支持的通义配音模型。");
+	if (!voice || voice.length > 100) throw new Error("请选择或输入有效的音色 ID。");
+	enforceSharedCloudTtsLimit(text);
+
+	const temporaryDirectory = await fsp.mkdtemp(path.join(app.getPath("temp"), "opencut-cloud-tts-"));
+	try {
+		const requestPath = path.join(temporaryDirectory, "request.json");
+		const responsePath = path.join(temporaryDirectory, "speech.mp3");
+		await fsp.writeFile(requestPath, JSON.stringify({
+			model,
+			input: text,
+			voice,
+			...(model.startsWith("gemini-") ? { response_format: "wav" } : {}),
+		}), "utf8");
+		const args = ["--silent", "--show-error", "--fail-with-body", "--location", "--connect-timeout", "12", "--max-time", "45"];
+		if (process.platform === "win32" && await isLocalProxyAvailable()) args.push("--proxy", "http://127.0.0.1:7897");
+		args.push(
+			"--header", `Authorization: Bearer ${apiKey}`,
+			"--header", "Content-Type: application/json",
+			"--data-binary", `@${requestPath}`,
+			"--output", responsePath,
+			CLOUD_TTS_ENDPOINT,
+		);
+		try {
+			await execFileAsync("curl.exe", args, { windowsHide: true, maxBuffer: 1024 * 1024 });
+		} catch (error) {
+			let detail = "请检查共享额度、网络或音色 ID。";
+			try { detail = (await fsp.readFile(responsePath, "utf8")).replace(/\s+/g, " ").slice(0, 500) || detail; } catch { /* Keep the safe fallback. */ }
+			throw new Error(`AIHUBMIX 配音失败：${detail}`);
+		}
+		let bytes = await fsp.readFile(responsePath);
+		if (bytes.subarray(0, 1).toString("utf8") === "{") {
+			let audioUrl;
+			try {
+				audioUrl = JSON.parse(bytes.toString("utf8"))?.output?.audio?.url;
+				const parsed = new URL(audioUrl);
+				if (!/^https?:$/.test(parsed.protocol)) throw new Error("invalid protocol");
+			} catch {
+				throw new Error("AIHUBMIX 没有返回可下载的音频地址。");
+			}
+			const downloadArgs = ["--silent", "--show-error", "--fail", "--location", "--connect-timeout", "12", "--max-time", "45"];
+			if (process.platform === "win32" && await isLocalProxyAvailable()) downloadArgs.push("--proxy", "http://127.0.0.1:7897");
+			downloadArgs.push("--output", responsePath, audioUrl);
+			try {
+				await execFileAsync("curl.exe", downloadArgs, { windowsHide: true, maxBuffer: 1024 * 1024 });
+			} catch {
+				throw new Error("配音已生成，但音频下载失败，请检查网络后重试。");
+			}
+			bytes = await fsp.readFile(responsePath);
+		}
+		if (bytes.length < 256 || bytes.length > 100 * 1024 * 1024) throw new Error("AIHUBMIX 未返回可用音频。");
+		const audioFormat = detectGeneratedAudioFormat(bytes);
+		const outputDirectory = path.join(app.getPath("userData"), "generated-audio");
+		await fsp.mkdir(outputDirectory, { recursive: true });
+		const name = `角色配音-${new Date().toISOString().replace(/[:.]/g, "-")}.${audioFormat.extension}`;
+		const outputPath = path.join(outputDirectory, name);
+		await fsp.writeFile(outputPath, bytes);
+		return { name, base64: bytes.toString("base64"), mimeType: audioFormat.mimeType, path: outputPath };
+	} finally {
+		await fsp.rm(temporaryDirectory, { recursive: true, force: true });
+	}
+}
+
+ipcMain.handle("opencut:tts-status", async () => ({ ready: await hasTtsModel(), downloading: Boolean(ttsDownloadPromise) }));
+ipcMain.handle("opencut:tts-download-model", async (_event, payload) => downloadDesktopTtsModel(payload));
+ipcMain.handle("opencut:tts-generate", async (_event, payload) => generateDesktopTts(payload));
+ipcMain.handle("opencut:tts-cloud-status", async () => ({ configured: Boolean(getCloudTtsApiKey()), shared: isUsingBundledCloudTtsKey(), secureStorage: safeStorage.isEncryptionAvailable() }));
+ipcMain.handle("opencut:tts-cloud-save-key", async (_event, payload) => saveCloudTtsApiKey(payload?.apiKey));
+ipcMain.handle("opencut:tts-cloud-generate", async (_event, payload) => generateCloudTts(payload));
 
 const CONVERSION_PROFILES = {
 	mp4_h264: { extension: "mp4", kind: "video", video: "libx264", audio: "aac" },
@@ -654,6 +1035,27 @@ function getPersistentWebPort() {
 	return port;
 }
 
+function canUsePort(port) {
+	return new Promise((resolve) => {
+		const probe = net.createServer();
+		const finish = (available) => {
+			probe.removeAllListeners();
+			if (probe.listening) probe.close(() => resolve(available));
+			else resolve(available);
+		};
+		probe.once("error", () => finish(false));
+		probe.once("listening", () => finish(true));
+		probe.listen(port, "127.0.0.1");
+	});
+}
+
+async function getAvailableWebPort(preferredPort) {
+	if (await canUsePort(preferredPort)) return preferredPort;
+	// Projects are kept in the browser database for this exact local origin.
+	// Switching ports would make every saved project appear to be missing.
+	throw new Error("已有 OpenCut 正在运行。请先关闭所有旧版 OpenCut 窗口，再重新打开本应用；你的项目不会丢失。");
+}
+
 function waitForServer(url, timeoutMs = 30000) {
 	const started = Date.now();
 	return new Promise((resolve, reject) => {
@@ -673,7 +1075,8 @@ function waitForServer(url, timeoutMs = 30000) {
 }
 
 async function createWindow() {
-	const port = getPersistentWebPort();
+	const preferredPort = getPersistentWebPort();
+	const port = await getAvailableWebPort(preferredPort);
 	const webRoot = getWebRoot();
 	webServer = spawn(process.execPath, [path.join(webRoot, "server.js")], {
 		cwd: webRoot,
@@ -709,7 +1112,7 @@ async function createWindow() {
 	const url = `http://127.0.0.1:${port}`;
 	await waitForServer(url);
 
-	const mainWindow = new BrowserWindow({
+	mainWindow = new BrowserWindow({
 		width: 1440,
 		height: 900,
 		minWidth: 1100,
@@ -737,6 +1140,12 @@ async function createWindow() {
 		});
 	}
 	mainWindow.once("ready-to-show", () => mainWindow.show());
+	mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+		if (!isMainFrame || errorCode === -3) return;
+		const message = `无法加载本地编辑器（${errorDescription}）。请关闭其他 OpenCut 窗口后重新打开。`;
+		appendServerLog(`[renderer] ${message} ${validatedUrl}\n`);
+		mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<main style="font-family:system-ui;padding:48px"><h2>打开编辑器失败</h2><p>${message}</p></main>`)}`);
+	});
 	if (!app.isPackaged || process.env.OPENCUT_DEBUG === "1") {
 		mainWindow.webContents.openDevTools({ mode: "detach" });
 	}
@@ -748,6 +1157,16 @@ async function createWindow() {
 	return mainWindow;
 }
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+	app.quit();
+} else {
+	app.on("second-instance", () => {
+		if (!mainWindow) return;
+		if (mainWindow.isMinimized()) mainWindow.restore();
+		mainWindow.focus();
+	});
+
 app
 	.whenReady()
 	.then(async () => {
@@ -758,6 +1177,8 @@ app
 		dialog.showErrorBox("OpenCut 启动失败", error.stack || error.message);
 		app.quit();
 	});
+
+}
 
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", () => webServer?.kill());
