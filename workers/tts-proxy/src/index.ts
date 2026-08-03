@@ -130,12 +130,31 @@ async function proxySpeech(request: Request, env: Env) {
 		const data = (await upstream.json()) as {
 			output?: { audio?: { url?: unknown } };
 		};
+		const response = data as {
+			data?: { audio?: { url?: unknown }; url?: unknown };
+			audio?: { url?: unknown };
+			audio_url?: unknown;
+			url?: unknown;
+		};
 		audioUrl =
-			typeof data.output?.audio?.url === "string" ? data.output.audio.url : "";
+			[
+				data.output?.audio?.url,
+				response.data?.audio?.url,
+				response.data?.url,
+				response.audio?.url,
+				response.audio_url,
+				response.url,
+			].find(
+				(candidate): candidate is string => typeof candidate === "string",
+			) || "";
 		const url = new URL(audioUrl);
 		if (url.protocol !== "https:") throw new Error("Invalid audio URL");
-	} catch {
-		return json({ error: "上游没有返回可下载的音频。" }, 502);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "unknown response";
+		return json(
+			{ error: `upstream audio URL missing: ${message.slice(0, 120)}` },
+			502,
+		);
 	}
 	const audio = await fetch(audioUrl);
 	if (!audio.ok) return json({ error: "生成成功，但音频下载失败。" }, 502);
