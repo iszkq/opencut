@@ -2,6 +2,8 @@
 
 这个 Worker 只负责在服务端保存 AIHUBMIX 密钥并转发配音请求。桌面应用不会收到、保存或公开该密钥。
 
+Cloudflare 控制台默认创建的是 `worker.js`，直接粘贴 `src/worker.js`；使用 Wrangler 命令部署时则使用 `src/index.ts`。
+
 ## 首次部署
 
 1. 在此目录执行 `bun install`。
@@ -13,8 +15,8 @@
 
 ```json
 {
-  "enabled": true,
-  "endpoint": "https://opencut-tts.<你的账号>.workers.dev/v1/audio/speech"
+	"enabled": true,
+	"endpoint": "https://opencut-tts.<你的账号>.workers.dev/v1/audio/speech"
 }
 ```
 
