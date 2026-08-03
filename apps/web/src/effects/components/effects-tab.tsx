@@ -26,6 +26,14 @@ import {
 import { cn } from "@/utils/ui";
 import { Separator } from "@/components/ui/separator";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
+import {
+	HAND_DRAW_DIRECTIONS,
+	isHandDrawDirection,
+	parseHandDrawRegions,
+	serializeHandDrawRegions,
+	type HandDrawDirection,
+	type HandDrawRegion,
+} from "@/effects/hand-draw-regions";
 
 export function StandaloneEffectTab({
 	element,
@@ -246,6 +254,14 @@ function EffectSection({
 	onRemove?: () => void;
 }) {
 	const definition = effectsRegistry.get(effect.type);
+	const handDrawRegions =
+		effect.type === "hand-draw"
+			? parseHandDrawRegions({ value: renderParams.drawRegions })
+			: [];
+	const updateHandDrawRegions = (regions: HandDrawRegion[]) => {
+		previewParam("drawRegions")(serializeHandDrawRegions({ regions }));
+		onCommit();
+	};
 
 	return (
 		<Section
@@ -292,7 +308,10 @@ function EffectSection({
 					{definition.params
 						.filter(
 							(param) =>
-								!(effect.type === "hand-draw" && param.key === "drawDuration"),
+								!(
+									effect.type === "hand-draw" &&
+									(param.key === "drawDuration" || param.key === "drawRegions")
+								),
 						)
 						.map((param) => (
 							<div key={param.key} className="flex flex-col gap-3.5">
@@ -307,8 +326,87 @@ function EffectSection({
 								<Separator />
 							</div>
 						))}
+					{effect.type === "hand-draw" ? (
+						<HandDrawRegionsSection
+							regions={handDrawRegions}
+							onChange={updateHandDrawRegions}
+						/>
+					) : null}
 				</SectionFields>
 			</SectionContent>
 		</Section>
+	);
+}
+
+function HandDrawRegionsSection({
+	regions,
+	onChange,
+}: {
+	regions: HandDrawRegion[];
+	onChange: (regions: HandDrawRegion[]) => void;
+}) {
+	const updateDirection = ({ id, direction }: { id: string; direction: HandDrawDirection }) =>
+		onChange(
+			regions.map((region) =>
+				region.id === id ? { ...region, direction } : region,
+			),
+		);
+
+	return (
+		<div className="flex flex-col gap-3 px-4 pb-4">
+			<div className="flex items-center justify-between gap-3 text-sm">
+				<span className="font-medium">分区绘制</span>
+				{regions.length > 0 ? (
+					<Button variant="ghost" size="sm" onClick={() => onChange([])}>
+						清空分区
+					</Button>
+				) : null}
+			</div>
+			<p className="text-xs text-muted-foreground">
+				开启“编辑分区”后，直接在预览画面拖拽框选。编号决定绘制先后。
+			</p>
+			{regions.map((region, index) => (
+				<div
+					key={region.id}
+					className="flex items-center gap-2 rounded-md border bg-muted/30 p-2"
+				>
+					<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
+						{index + 1}
+					</span>
+					<select
+						className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs"
+						value={region.direction}
+						onChange={(event) =>
+							updateDirection({
+								id: region.id,
+								direction: isHandDrawDirection(event.target.value)
+									? event.target.value
+									: "left-to-right",
+							})
+						}
+					>
+						{HAND_DRAW_DIRECTIONS.map((direction) => (
+							<option key={direction} value={direction}>
+								{direction === "left-to-right"
+									? "左→右，上→下"
+									: direction === "right-to-left"
+										? "右→左，上→下"
+										: direction === "top-to-bottom"
+											? "上→下，左→右"
+											: "下→上，左→右"}
+							</option>
+						))}
+					</select>
+					<Button
+						variant="ghost"
+						size="icon"
+						aria-label={`删除分区 ${index + 1}`}
+						onClick={() => onChange(regions.filter((item) => item.id !== region.id))}
+					>
+						<HugeiconsIcon icon={Delete02Icon} />
+					</Button>
+				</div>
+			))}
+		</div>
 	);
 }

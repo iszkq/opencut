@@ -8,6 +8,7 @@ import { SnapGuides } from "./snap-guides";
 import { TextEditOverlay } from "./text-edit-overlay";
 import { usePropertiesStore } from "@/components/editor/panels/properties/stores/properties-store";
 import { useEditor } from "@/editor/use-editor";
+import { HandDrawRegionOverlay } from "./hand-draw-region-overlay";
 
 export function PreviewInteractionOverlay() {
 	const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
@@ -28,6 +29,11 @@ export function PreviewInteractionOverlay() {
 	const isMaskMode = activeElement
 		? activeTabPerType[activeElement.type] === "masks"
 		: false;
+	const isHandDrawRegionEditing =
+		activeElement?.type === "effect" &&
+		activeElement.effectType === "hand-draw" &&
+		activeElement.params.regionEditing === true &&
+		activeTabPerType.effect === "effects";
 
 	const {
 		onPointerDown,
@@ -85,7 +91,9 @@ export function PreviewInteractionOverlay() {
 				onDoubleClick={onDoubleClick}
 				onDragStart={(e) => e.preventDefault()}
 			/>
-			{editingText ? (
+			{isHandDrawRegionEditing && selectedRef ? (
+				<HandDrawRegionOverlay trackId={selectedRef.trackId} element={activeElement} />
+			) : editingText ? (
 				<TextEditOverlay
 					trackId={editingText.trackId}
 					elementId={editingText.elementId}

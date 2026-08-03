@@ -37,11 +37,22 @@ type PencilStroke = {
 	maxY: number;
 };
 
+type HandDrawRegion = {
+	order: number;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	drawOrder: number;
+};
+
 type PencilSketchCacheEntry = {
 	canvas: OffscreenCanvas;
 	width: number;
 	height: number;
 	lineStrength: number;
+	drawOrder: number;
+	regionsKey: string;
 	strokes: PencilStroke[];
 	totalPoints: number;
 	lineMaskCanvas?: OffscreenCanvas;
@@ -366,7 +377,18 @@ function drawHandDrawReveal({
 	const colorDelay = clampUnit(pass.uniforms.u_color_delay);
 	const roughness = clampUnit(pass.uniforms.u_roughness);
 	const lineStrength = clampUnit(pass.uniforms.u_line_strength);
-	const sketch = getPencilSketch({ source, width, height, lineStrength });
+	const drawOrder = Math.round(
+		clampUnit(pass.uniforms.u_draw_order) * 3,
+	);
+	const drawRegions = readHandDrawRegions({ value: pass.uniforms.u_draw_regions });
+	const sketch = getPencilSketch({
+		source,
+		width,
+		height,
+		lineStrength,
+		drawOrder,
+		drawRegions,
+	});
 	// The renderer's final frame sits just before the timeline endpoint, so it
 	// does not always receive an exact progress of 1. Finish a little earlier
 	// to guarantee the pen is gone once the drawing is complete.
@@ -458,19 +480,26 @@ function getPencilSketch({
 	width,
 	height,
 	lineStrength,
+	drawOrder,
+	drawRegions,
 }: {
 	source: CanvasImageSource;
 	width: number;
 	height: number;
 	lineStrength: number;
+	drawOrder: number;
+	drawRegions: HandDrawRegion[];
 }): PencilSketchCacheEntry {
 	const cacheKey = typeof source === "object" && source !== null ? source : null;
+	const regionsKey = JSON.stringify(drawRegions);
 	const cached = cacheKey ? pencilSketchCache.get(cacheKey) : undefined;
 	if (
 		cached &&
 		cached.width === width &&
 		cached.height === height &&
-		cached.lineStrength === lineStrength
+		cached.lineStrength === lineStrength &&
+		cached.drawOrder === drawOrder &&
+		cached.regionsKey === regionsKey
 	) {
 		return cached;
 	}
@@ -510,12 +539,20 @@ function getPencilSketch({
 	}
 	context.clearRect(0, 0, width, height);
 	context.putImageData(sketchPixels, 0, 0);
-	const strokes = tracePencilStrokes({ edges, width, height });
+	const strokes = tracePencilStrokes({
+		edges,
+		width,
+		height,
+		drawOrder,
+		drawRegions,
+	});
 	const entry = {
 		canvas,
 		width,
 		height,
 		lineStrength,
+		drawOrder,
+		regionsKey,
 		strokes,
 		totalPoints: strokes.reduce((total, stroke) => total + stroke.points.length, 0),
 		lineMaskPoints: 0,
@@ -699,10 +736,14 @@ function tracePencilStrokes({
 	edges,
 	width,
 	height,
+	drawOrder,
+	drawRegions,
 }: {
 	edges: Uint8Array;
 	width: number;
 	height: number;
+	drawOrder: number;
+	drawRegions: HandDrawRegion[];
 }): PencilStroke[] {
 	const visited = new Uint8Array(edges.length);
 	const strokes: PencilStroke[] = [];
@@ -763,7 +804,13 @@ function tracePencilStrokes({
 			}
 		}
 	}
-	return orderPencilStrokes({ strokes, width, height });
+	return orderPencilStrokes({
+		strokes,
+		width,
+		height,
+		drawOrder,
+		drawRegions,
+	});
 }
 
 function simplifyPencilPoints({
@@ -796,10 +843,14 @@ function orderPencilStrokes({
 	strokes,
 	width,
 	height,
+	drawOrder,
+	drawRegions,
 }: {
 	strokes: PencilStroke[];
 	width: number;
 	height: number;
+	drawOrder: number;
+	drawRegions: HandDrawRegion[];
 }): PencilStroke[] {
 	// Sobel edges are necessarily fragmented (each letter and each side of a
 	// shape is a separate contour). Ordering only by contour length therefore
@@ -813,17 +864,35 @@ function orderPencilStrokes({
 		splitStrokeIntoDrawingRows({ stroke, rowHeight }),
 	);
 	return orderedSlices.sort((left, right) => {
+		const leftRegion = findDrawRegion({ stroke: left, width, height, regions: drawRegions });
+		const rightRegion = findDrawRegion({ stroke: right, width, height, regions: drawRegions });
+		if (leftRegion?.order !== rightRegion?.order) {
+			return (leftRegion?.order ?? Number.MAX_SAFE_INTEGER) - (rightRegion?.order ?? Number.MAX_SAFE_INTEGER);
+		}
+		const activeDrawOrder = leftRegion?.drawOrder ?? drawOrder;
 		const leftRow = Math.floor(((left.minY + left.maxY) / 2) / rowHeight);
 		const rightRow = Math.floor(((right.minY + right.maxY) / 2) / rowHeight);
-		if (leftRow !== rightRow) return leftRow - rightRow;
-
 		const leftColumn = Math.floor(
 			((left.minX + left.maxX) / 2) / columnWidth,
 		);
 		const rightColumn = Math.floor(
 			((right.minX + right.maxX) / 2) / columnWidth,
 		);
-		if (leftColumn !== rightColumn) return leftColumn - rightColumn;
+		const columnDirection = activeDrawOrder === 1 ? -1 : 1;
+		const rowDirection = activeDrawOrder === 3 ? -1 : 1;
+		const columnFirst = activeDrawOrder === 0 || activeDrawOrder === 1;
+		if (columnFirst && leftColumn !== rightColumn) {
+			return (leftColumn - rightColumn) * columnDirection;
+		}
+		if (!columnFirst && leftRow !== rightRow) {
+			return (leftRow - rightRow) * rowDirection;
+		}
+		if (columnFirst && leftRow !== rightRow) {
+			return (leftRow - rightRow) * rowDirection;
+		}
+		if (!columnFirst && leftColumn !== rightColumn) {
+			return (leftColumn - rightColumn) * columnDirection;
+		}
 
 		// In the same local area, long contours establish the outer shape first,
 		// then the small details inside it.
@@ -898,6 +967,53 @@ function smoothStep({
 function clampUnit(value: EffectPass["uniforms"][string] | undefined): number {
 	const number = typeof value === "number" ? value : 0;
 	return Math.min(Math.max(number, 0), 1);
+}
+
+function readHandDrawRegions({
+	value,
+}: {
+	value: EffectPass["uniforms"][string] | undefined;
+}): HandDrawRegion[] {
+	if (!Array.isArray(value)) return [];
+	const regions: HandDrawRegion[] = [];
+	for (let index = 0; index + 5 < value.length; index += 6) {
+		const [x, y, width, height, order, drawOrder] = value.slice(index, index + 6);
+		if (![x, y, width, height, order, drawOrder].every(Number.isFinite)) continue;
+		regions.push({
+			x: clampUnit(x),
+			y: clampUnit(y),
+			width: Math.min(1, Math.max(0.01, width)),
+			height: Math.min(1, Math.max(0.01, height)),
+			order: Math.max(1, Math.round(order)),
+			drawOrder: Math.min(3, Math.max(0, Math.round(drawOrder))),
+		});
+	}
+	return regions.sort((left, right) => left.order - right.order);
+}
+
+function findDrawRegion({
+	stroke,
+	width,
+	height,
+	regions,
+}: {
+	stroke: PencilStroke;
+	width: number;
+	height: number;
+	regions: HandDrawRegion[];
+}): HandDrawRegion | null {
+	if (regions.length === 0) return null;
+	const centerX = (stroke.minX + stroke.maxX) / (2 * width);
+	const centerY = (stroke.minY + stroke.maxY) / (2 * height);
+	return (
+		regions.find(
+			(region) =>
+				centerX >= region.x &&
+				centerX <= region.x + region.width &&
+				centerY >= region.y &&
+				centerY <= region.y + region.height,
+		) ?? null
+	);
 }
 
 function collectTextNode({

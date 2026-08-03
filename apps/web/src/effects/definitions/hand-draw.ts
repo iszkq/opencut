@@ -1,4 +1,8 @@
 import type { EffectDefinition, EffectPass } from "@/effects/types";
+import {
+	handDrawDirectionCode,
+	parseHandDrawRegions,
+} from "@/effects/hand-draw-regions";
 
 export const HAND_DRAW_SHADER = "hand-draw";
 
@@ -29,6 +33,32 @@ function clamp({
 	return Math.min(Math.max(value, min), max);
 }
 
+function drawOrderParam({ params }: { params: Record<string, unknown> }): number {
+	// The renderer only accepts numeric uniforms. Keep the user-facing option a
+	// descriptive string and map it to a stable ordering code here.
+	switch (params.drawOrder) {
+		case "right-to-left":
+			return 1;
+		case "top-to-bottom":
+			return 2;
+		case "bottom-to-top":
+			return 3;
+		default:
+			return 0;
+	}
+}
+
+function drawRegionsParam({ params }: { params: Record<string, unknown> }): number[] {
+	return parseHandDrawRegions({ value: params.drawRegions }).flatMap((region) => [
+		region.x,
+		region.y,
+		region.width,
+		region.height,
+		region.order,
+		handDrawDirectionCode({ direction: region.direction }),
+	]);
+}
+
 function buildHandDrawPasses({
 	effectParams,
 	localTime,
@@ -51,6 +81,8 @@ function buildHandDrawPasses({
 			shader: HAND_DRAW_SHADER,
 			uniforms: {
 				u_progress: progress,
+				u_draw_order: drawOrderParam({ params: effectParams }) / 3,
+				u_draw_regions: drawRegionsParam({ params: effectParams }),
 				u_line_strength: clamp({
 					value: numberParam({
 						params: effectParams,
@@ -88,6 +120,33 @@ export const handDrawEffectDefinition: EffectDefinition = {
 	name: "手绘显现",
 	keywords: ["手绘", "素描", "涂鸦", "白板", "绘制", "线稿"],
 	params: [
+		{
+			key: "regionEditing",
+			label: "编辑分区（在预览中拖拽）",
+			type: "boolean",
+			default: false,
+			keyframable: false,
+		},
+		{
+			key: "drawRegions",
+			label: "分区数据",
+			type: "text",
+			default: "[]",
+			keyframable: false,
+		},
+		{
+			key: "drawOrder",
+			label: "绘制顺序",
+			type: "select",
+			default: "left-to-right",
+			keyframable: false,
+			options: [
+				{ value: "left-to-right", label: "左→右（每栏从上到下）" },
+				{ value: "right-to-left", label: "右→左（每栏从上到下）" },
+				{ value: "top-to-bottom", label: "上→下（每行从左到右）" },
+				{ value: "bottom-to-top", label: "下→上（每行从左到右）" },
+			],
+		},
 		{
 			key: "drawDuration",
 			label: "绘制时长（0=整段）",
