@@ -13,10 +13,6 @@ type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
 	| { success: false; error: string };
 
-function makeEvenDimension({ value }: { value: number }): number {
-	return Math.max(2, Math.floor(value / 2) * 2);
-}
-
 export class RendererManager {
 	private renderTree: RootNode | null = null;
 	private _isDegraded = false;
@@ -169,16 +165,6 @@ export class RendererManager {
 
 			const exportFps = fps ?? activeProject.settings.fps;
 			const canvasSize = activeProject.settings.canvasSize;
-			// AVC/H.264 is 4:2:0 encoded and rejects odd dimensions. Keep the
-			// project canvas untouched, but render the export at the nearest valid
-			// even size so a custom size such as 1672 x 941 exports successfully.
-			const exportCanvasSize =
-				format === "webm"
-					? canvasSize
-					: {
-						width: makeEvenDimension({ value: canvasSize.width }),
-						height: makeEvenDimension({ value: canvasSize.height }),
-					};
 
 			let audioBuffer: AudioBuffer | null = null;
 			if (includeAudio) {
@@ -194,13 +180,13 @@ export class RendererManager {
 				tracks,
 				mediaAssets,
 				duration,
-				canvasSize: exportCanvasSize,
+				canvasSize,
 				background: activeProject.settings.background,
 			});
 
 			const exporter = new SceneExporter({
-				width: exportCanvasSize.width,
-				height: exportCanvasSize.height,
+				width: canvasSize.width,
+				height: canvasSize.height,
 				fps: exportFps,
 				format,
 				quality,

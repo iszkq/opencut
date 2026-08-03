@@ -289,24 +289,19 @@ function EffectSection({
 				className={cn("p-0", onToggle && !effect.enabled && "opacity-50")}
 			>
 				<SectionFields>
-					{definition.params
-						.filter(
-							(param) =>
-								!(effect.type === "hand-draw" && param.key === "drawDuration"),
-						)
-						.map((param) => (
-							<div key={param.key} className="flex flex-col gap-3.5">
-								<div className="px-4">
-									<PropertyParamField
-										param={param}
-										value={renderParams[param.key] ?? param.default}
-										onPreview={previewParam(param.key)}
-										onCommit={onCommit}
-									/>
-								</div>
-								<Separator />
+					{definition.params.map((param) => (
+						<div key={param.key} className="flex flex-col gap-3.5">
+							<div className="px-4">
+								<PropertyParamField
+									param={param}
+									value={renderParams[param.key] ?? param.default}
+									onPreview={previewParam(param.key)}
+									onCommit={onCommit}
+								/>
 							</div>
-						))}
+							<Separator />
+						</div>
+					))}
 				</SectionFields>
 			</SectionContent>
 		</Section>

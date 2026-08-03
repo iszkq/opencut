@@ -42,16 +42,13 @@ function buildTrackNodes({
 	isPreview?: boolean;
 }): AnyBaseNode[] {
 	const nodes: AnyBaseNode[] = [];
-	// Scene effects must run after the visual layers they affect.  Otherwise an
-	// effect track shown above media processes an empty scene and looks inert.
-	const sceneEffectNodes: AnyBaseNode[] = [];
 
 	for (const track of tracks) {
 		const elements = getVisibleSortedElements({ track });
 
 		for (const element of elements) {
 			if (element.type === "effect") {
-				sceneEffectNodes.push(
+				nodes.push(
 					new EffectLayerNode({
 						effectType: element.effectType,
 						effectParams: element.params,
@@ -165,7 +162,7 @@ function buildTrackNodes({
 		}
 	}
 
-	return [...nodes, ...sceneEffectNodes];
+	return nodes;
 }
 
 function buildBlurBackgroundNodes({
