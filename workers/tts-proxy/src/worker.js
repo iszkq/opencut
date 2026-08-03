@@ -83,7 +83,7 @@ async function proxySpeech(request, env) {
 		return json({ error: "无效的角色音色。" }, 400);
 
 	const upstream = await fetch(
-		env.UPSTREAM_URL || "https://aihubmix.com/v1/audio/speech",
+		env.UPSTREAM_URL || "https://api.inferera.com/v1/audio/speech",
 		{
 			method: "POST",
 			headers: {

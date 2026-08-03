@@ -3,6 +3,6 @@ main = "src/index.ts"
 compatibility_date = "2026-08-04"
 
 [vars]
-UPSTREAM_URL = "https://aihubmix.com/v1/audio/speech"
+UPSTREAM_URL = "https://api.inferera.com/v1/audio/speech"
 MAX_INPUT_CHARS = "500"
 RATE_LIMIT_PER_MINUTE = "8"

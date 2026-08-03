@@ -1,6 +1,6 @@
 # OpenCut 角色配音 Worker
 
-这个 Worker 只负责在服务端保存 AIHUBMIX 密钥并转发配音请求。桌面应用不会收到、保存或公开该密钥。
+这个 Worker 只负责在服务端保存 Inferera 兼容接口密钥并转发配音请求。桌面应用不会收到、保存或公开该密钥。
 
 Cloudflare 控制台默认创建的是 `worker.js`，直接粘贴 `src/worker.js`；使用 Wrangler 命令部署时则使用 `src/index.ts`。
 
@@ -24,7 +24,7 @@ Cloudflare 控制台默认创建的是 `worker.js`，直接粘贴 `src/worker.js
 
 ## 运维配置
 
-- `AIHUBMIX_API_KEY`：只通过 Cloudflare Secret 设置，绝不要写入仓库或 `wrangler.toml`。
+- `AIHUBMIX_API_KEY`：名称为兼容旧版保留，值应填写 Inferera Key；只通过 Cloudflare Secret 设置，绝不要写入仓库或 `wrangler.toml`。
 - `MAX_INPUT_CHARS`：单次生成的最大字符数，默认 `500`，最大 `2000`。
 - `RATE_LIMIT_PER_MINUTE`：单 IP 每分钟最大请求次数，默认 `8`。这是基础保护；正式运营建议再在 Cloudflare 控制台增加 WAF 速率限制规则。
 - 停止共享服务时，将 `config/cloud-tts.json` 的 `enabled` 改为 `false`；用户仍可使用自己保存在本机的 API Key。
