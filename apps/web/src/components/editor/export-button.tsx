@@ -21,16 +21,15 @@ type VideoResult = { outputPath: string; mode: "hardware" | "cpu" };
 
 export function ExportButton() {
 	const [open, setOpen] = useState(false);
-	const editor = useEditor();
 	const hasProject = Boolean(useEditor((store) => store.project.getActiveOrNull()));
 
 	return (
 		<Popover
 			open={open}
-			onOpenChange={(nextOpen) => {
-				if (!nextOpen) editor.project.cancelExport();
-				setOpen(nextOpen);
-			}}
+			// Closing a popover is ordinary navigation, not an export cancellation.
+			// The render/export job is owned by ProjectManager and must continue
+			// while the user selects clips, edits the timeline, or switches panels.
+			onOpenChange={setOpen}
 		>
 			<PopoverTrigger asChild>
 				<button

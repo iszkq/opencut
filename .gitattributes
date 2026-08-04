@@ -6,5 +6,6 @@
 *.avif binary
 *.gif binary
 *.webp binary
+*.wav binary
 *.wasm binary
 *.onnx binary

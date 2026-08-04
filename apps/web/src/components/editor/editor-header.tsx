@@ -16,6 +16,11 @@ import { FeedbackPopover } from "@/feedback/components/feedback-popover";
 import { ThemeToggle } from "../theme-toggle";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
+import {
+	exportPortableProject,
+	importPortableProject,
+	pickPortableProjectFile,
+} from "@/project/portable-project";
 import { CommandIcon, Logout05Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ShortcutsDialog } from "@/actions/components/shortcuts-dialog";
@@ -43,9 +48,51 @@ function ProjectDropdown() {
 		"delete" | "rename" | "shortcuts" | null
 	>(null);
 	const [isExiting, setIsExiting] = useState(false);
+	const [isProjectPackageBusy, setIsProjectPackageBusy] = useState(false);
 	const router = useRouter();
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActive());
+
+	const handleExportProjectPackage = async () => {
+		if (isProjectPackageBusy || !activeProject) return;
+		setIsProjectPackageBusy(true);
+		try {
+			await editor.save.flush();
+			const result = await exportPortableProject({
+				project: {
+					...editor.project.getActive(),
+					scenes: editor.scenes.getScenes(),
+				},
+				assets: editor.media.getAssets(),
+			});
+			if (!result.cancelled)
+				toast.success("工程文件已导出，可在另一台电脑导入继续编辑");
+		} catch (error) {
+			toast.error("导出工程文件失败", {
+				description: error instanceof Error ? error.message : undefined,
+			});
+		} finally {
+			setIsProjectPackageBusy(false);
+		}
+	};
+
+	const handleImportProjectPackage = async () => {
+		if (isProjectPackageBusy) return;
+		setIsProjectPackageBusy(true);
+		try {
+			const file = await pickPortableProjectFile();
+			if (!file) return;
+			const projectId = await importPortableProject({ file });
+			toast.success("工程已导入，正在打开");
+			router.push(`/editor/${projectId}`);
+		} catch (error) {
+			toast.error("导入工程文件失败", {
+				description: error instanceof Error ? error.message : undefined,
+			});
+		} finally {
+			setIsProjectPackageBusy(false);
+		}
+	};
 
 	const handleExit = async () => {
 		if (isExiting) return;
@@ -76,8 +123,7 @@ function ProjectDropdown() {
 				});
 			} catch (error) {
 				toast.error("重命名项目失败", {
-					description:
-						error instanceof Error ? error.message : "请稍后重试",
+					description: error instanceof Error ? error.message : "请稍后重试",
 				});
 			} finally {
 				setOpenDialog(null);
@@ -94,8 +140,7 @@ function ProjectDropdown() {
 				router.push("/projects");
 			} catch (error) {
 				toast.error("删除项目失败", {
-					description:
-						error instanceof Error ? error.message : "请稍后重试",
+					description: error instanceof Error ? error.message : "请稍后重试",
 				});
 			} finally {
 				setOpenDialog(null);
@@ -116,6 +161,19 @@ function ProjectDropdown() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="start" className="z-100 w-44">
+					<DropdownMenuItem
+						onClick={() => void handleExportProjectPackage()}
+						disabled={isProjectPackageBusy}
+					>
+						{isProjectPackageBusy ? "正在处理工程文件…" : "导出工程文件"}
+					</DropdownMenuItem>
+					<DropdownMenuItem
+						onClick={() => void handleImportProjectPackage()}
+						disabled={isProjectPackageBusy}
+					>
+						导入工程文件
+					</DropdownMenuItem>
+
 					<DropdownMenuItem
 						onClick={handleExit}
 						disabled={isExiting}
@@ -215,8 +273,7 @@ function EditableProjectName() {
 				});
 			} catch (error) {
 				toast.error("重命名项目失败", {
-					description:
-						error instanceof Error ? error.message : "请稍后重试",
+					description: error instanceof Error ? error.message : "请稍后重试",
 				});
 			}
 		}

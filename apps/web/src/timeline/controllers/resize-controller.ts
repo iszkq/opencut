@@ -1,4 +1,4 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { BASE_TIMELINE_PIXELS_PER_SECOND } from "@/timeline/scale";
 import {
 	addMediaTime,
@@ -112,7 +112,8 @@ export function buildResizeMembers({
 		const rightNeighborBound = otherElements
 			.filter(
 				(el) =>
-					el.startTime >= addMediaTime({ a: element.startTime, b: element.duration }),
+					el.startTime >=
+					addMediaTime({ a: element.startTime, b: element.duration }),
 			)
 			.reduce<MediaTime | null>(
 				(bound, el) =>
@@ -126,6 +127,7 @@ export function buildResizeMembers({
 			{
 				trackId,
 				elementId,
+				elementType: element.type,
 				startTime: element.startTime,
 				duration: element.duration,
 				trimStart: element.trimStart,
@@ -152,7 +154,10 @@ function hasResizeChanges({
 			member?.trimStart !== update.patch.trimStart ||
 			member?.trimEnd !== update.patch.trimEnd ||
 			member?.startTime !== update.patch.startTime ||
-			member?.duration !== update.patch.duration
+			member?.duration !== update.patch.duration ||
+			member?.retime?.rate !== update.patch.retime?.rate ||
+			member?.retime?.maintainPitch !== update.patch.retime?.maintainPitch ||
+			member?.retime?.pitchSemitones !== update.patch.retime?.pitchSemitones
 		);
 	});
 }
@@ -163,12 +168,14 @@ export class ResizeController {
 	private session: Session = { kind: "idle" };
 	private readonly subscribers = new Set<() => void>();
 	private readonly configRef: ResizeConfigRef;
+	private previewFrameId: number | null = null;
+	private pendingPreview: GroupResizeResult | null = null;
 
 	constructor(deps: { configRef: ResizeConfigRef }) {
 		this.configRef = deps.configRef;
 		this.onResizeStart = this.onResizeStart.bind(this);
-		this.handleMouseMove = this.handleMouseMove.bind(this);
-		this.handleMouseUp = this.handleMouseUp.bind(this);
+		this.handlePointerMove = this.handlePointerMove.bind(this);
+		this.handlePointerUp = this.handlePointerUp.bind(this);
 	}
 
 	private get config(): ResizeConfig {
@@ -200,7 +207,7 @@ export class ResizeController {
 		track,
 		side,
 	}: {
-		event: ReactMouseEvent;
+		event: ReactPointerEvent;
 		element: TimelineElement;
 		track: TimelineTrack;
 		side: ResizeSide;
@@ -243,13 +250,13 @@ export class ResizeController {
 	}
 
 	private activate(): void {
-		document.addEventListener("mousemove", this.handleMouseMove);
-		document.addEventListener("mouseup", this.handleMouseUp);
+		document.addEventListener("pointermove", this.handlePointerMove);
+		document.addEventListener("pointerup", this.handlePointerUp);
 	}
 
 	private deactivate(): void {
-		document.removeEventListener("mousemove", this.handleMouseMove);
-		document.removeEventListener("mouseup", this.handleMouseUp);
+		document.removeEventListener("pointermove", this.handlePointerMove);
+		document.removeEventListener("pointerup", this.handlePointerUp);
 	}
 
 	private notify(): void {
@@ -257,10 +264,28 @@ export class ResizeController {
 	}
 
 	private finishSession(): void {
+		if (this.previewFrameId !== null) {
+			cancelAnimationFrame(this.previewFrameId);
+			this.previewFrameId = null;
+		}
+		this.pendingPreview = null;
 		this.session = { kind: "idle" };
 		this.deactivate();
 		this.config.onSnapPointChange?.(null);
 		this.notify();
+	}
+
+	private schedulePreview(result: GroupResizeResult): void {
+		this.pendingPreview = result;
+		if (this.previewFrameId !== null) return;
+		this.previewFrameId = requestAnimationFrame(() => {
+			this.previewFrameId = null;
+			const pending = this.pendingPreview;
+			this.pendingPreview = null;
+			if (pending && this.session.kind === "active") {
+				this.config.previewElements(pending.updates);
+			}
+		});
 	}
 
 	private snappedDelta({
@@ -271,8 +296,11 @@ export class ResizeController {
 		rawDeltaTime: MediaTime;
 	}): MediaTime {
 		const { snappingEnabled, isShiftHeld, zoomLevel } = this.config;
+		const isAudioStretch = session.members.every(
+			(member) => member.elementType === "audio",
+		);
 
-		if (!snappingEnabled || isShiftHeld()) {
+		if (isAudioStretch || !snappingEnabled || isShiftHeld()) {
 			this.config.onSnapPointChange?.(null);
 			return rawDeltaTime;
 		}
@@ -314,7 +342,10 @@ export class ResizeController {
 			) {
 				closestSnapDistance = snapResult.snapDistance;
 				closestSnapPoint = snapResult.snapPoint;
-				deltaTime = subMediaTime({ a: snapResult.snappedTime, b: baseEdgeTime });
+				deltaTime = subMediaTime({
+					a: snapResult.snappedTime,
+					b: baseEdgeTime,
+				});
 			}
 		}
 
@@ -322,7 +353,7 @@ export class ResizeController {
 		return deltaTime;
 	}
 
-	private handleMouseMove({ clientX }: MouseEvent): void {
+	private handlePointerMove({ clientX }: PointerEvent): void {
 		if (this.session.kind !== "active") return;
 		const session = this.session;
 
@@ -342,10 +373,10 @@ export class ResizeController {
 		});
 
 		session.result = result;
-		this.config.previewElements(result.updates);
+		this.schedulePreview(result);
 	}
 
-	private handleMouseUp(): void {
+	private handlePointerUp(): void {
 		if (this.session.kind !== "active") return;
 		const session = this.session;
 

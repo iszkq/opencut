@@ -1,5 +1,6 @@
 import { clampAnimationsToDuration } from "@/animation";
 import {
+	clampPitchSemitones,
 	clampRetimeRate,
 	getSourceSpanAtClipTime,
 	getTimelineDurationForSourceSpan,
@@ -44,6 +45,9 @@ const deriveRules: ElementUpdateRule[] = [
 				? {
 						...patch.retime,
 						rate: clampRetimeRate({ rate: patch.retime.rate }),
+						pitchSemitones: clampPitchSemitones({
+							semitones: patch.retime.pitchSemitones ?? 0,
+						}),
 					}
 				: undefined;
 
@@ -149,9 +153,7 @@ export function applyElementUpdate({
 			...(patch.params ?? {}),
 		},
 	} as TimelineElement;
-	const changedFields = new Set(
-		Object.keys(patch) as ElementUpdateField[],
-	);
+	const changedFields = new Set(Object.keys(patch) as ElementUpdateField[]);
 
 	for (const rule of deriveRules) {
 		if (!shouldApplyRule({ rule, changedFields })) {

@@ -25,6 +25,10 @@ import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import { useSoundSearch } from "@/sounds/use-sound-search";
 import { useSoundsStore } from "@/sounds/sounds-store";
 import type { SavedSound, SoundEffect } from "@/sounds/types";
+import {
+	BUILTIN_SOUND_EFFECTS,
+	matchesBuiltinSound,
+} from "@/sounds/builtin-sounds";
 import { cn } from "@/utils/ui";
 import {
 	FavouriteIcon,
@@ -196,7 +200,11 @@ function SoundEffectsView() {
 		handleScroll({ currentTarget } as React.UIEvent<HTMLDivElement>);
 	};
 
-	const displayedSounds = searchQuery ? searchResults : topSoundEffects;
+	const builtinSounds = BUILTIN_SOUND_EFFECTS.filter((sound) =>
+		matchesBuiltinSound({ sound, query: searchQuery }),
+	);
+	const onlineSounds = searchQuery ? searchResults : topSoundEffects;
+	const displayedSounds = [...builtinSounds, ...onlineSounds];
 
 	const playSound = ({ sound }: { sound: SoundEffect }) => {
 		if (playingId === sound.id) {
@@ -272,6 +280,11 @@ function SoundEffectsView() {
 					onScrollCapture={handleScrollWithPosition}
 				>
 					<div className="flex flex-col gap-4">
+						{builtinSounds.length > 0 && (
+							<p className="text-muted-foreground text-xs font-medium">
+								内置音效（已随应用安装，可直接使用）
+							</p>
+						)}
 						{isLoading && !searchQuery && (
 							<div className="text-muted-foreground text-sm">
 								Loading sounds...

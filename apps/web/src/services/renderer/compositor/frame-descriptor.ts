@@ -44,6 +44,13 @@ type HandDrawRegion = {
 	width: number;
 	height: number;
 	drawOrder: number;
+	durationSeconds: number;
+	pauseSeconds: number;
+};
+
+type SceneHandDrawAssignment = {
+	pass: EffectPass | null;
+	claimed: boolean;
 };
 
 type PencilSketchCacheEntry = {
@@ -75,7 +82,10 @@ export async function buildFrameDescriptor({
 }> {
 	const items: FrameItemDescriptor[] = [];
 	const textures = new Map<string, TextureUploadDescriptor>();
-	const handDrawPasses = collectActiveHandDrawPasses({ node });
+	const sceneHandDraw = {
+		pass: collectActiveHandDrawPass({ node }),
+		claimed: false,
+	};
 
 	await collectNode({
 		node,
@@ -83,7 +93,7 @@ export async function buildFrameDescriptor({
 		path: "root",
 		items,
 		textures,
-		handDrawPasses,
+		sceneHandDraw,
 	});
 
 	incrementCounter({ name: "frameItems", by: items.length });
@@ -108,14 +118,14 @@ async function collectNode({
 	path,
 	items,
 	textures,
-	handDrawPasses,
+	sceneHandDraw,
 }: {
 	node: AnyBaseNode;
 	renderer: CanvasRenderer;
 	path: string;
 	items: FrameItemDescriptor[];
 	textures: Map<string, TextureUploadDescriptor>;
-	handDrawPasses: EffectPass[];
+	sceneHandDraw: SceneHandDrawAssignment;
 }): Promise<void> {
 	if (node instanceof RootNode) {
 		for (let index = 0; index < node.children.length; index++) {
@@ -125,7 +135,7 @@ async function collectNode({
 				path: `${path}:${index}`,
 				items,
 				textures,
-				handDrawPasses,
+				sceneHandDraw,
 			});
 		}
 		return;
@@ -234,7 +244,7 @@ async function collectNode({
 			path,
 			items,
 			textures,
-			handDrawPasses,
+			sceneHandDraw,
 		});
 		return;
 	}
@@ -256,14 +266,14 @@ async function collectVisualSourceNode({
 	path,
 	items,
 	textures,
-	handDrawPasses,
+	sceneHandDraw,
 }: {
 	node: VideoNode | ImageNode | StickerNode | GraphicNode;
 	renderer: CanvasRenderer;
 	path: string;
 	items: FrameItemDescriptor[];
 	textures: Map<string, TextureUploadDescriptor>;
-	handDrawPasses: EffectPass[];
+	sceneHandDraw: SceneHandDrawAssignment;
 }) {
 	if (!node.resolved) {
 		return;
@@ -287,7 +297,22 @@ async function collectVisualSourceNode({
 			: (node.resolved as ResolvedVisualSourceNodeState).sourceHeight;
 
 	const textureId = `${path}:source`;
-	const handDrawPass = handDrawPasses.at(-1);
+	const clipHandDrawPass = node.resolved.effectPasses
+		.flat()
+		.filter((pass) => pass.shader === HAND_DRAW_SHADER)
+		.at(-1);
+	// Old projects can already contain a standalone Hand-draw element on the
+	// effect track. It has no target id, so bind that legacy layer once to the
+	// bottom/main image or video instead of incorrectly applying it to every
+	// visual source (stickers, captions, and later overlays included).
+	const legacySceneHandDrawPass =
+		!clipHandDrawPass &&
+		!sceneHandDraw.claimed &&
+		(node instanceof ImageNode || node instanceof VideoNode)
+			? sceneHandDraw.pass
+			: null;
+	if (legacySceneHandDrawPass) sceneHandDraw.claimed = true;
+	const handDrawPass = clipHandDrawPass ?? legacySceneHandDrawPass;
 	if (handDrawPass) {
 		textures.set(textureId, {
 			kind: "rendered",
@@ -343,7 +368,11 @@ async function collectVisualSourceNode({
 		transform,
 		opacity: node.resolved.opacity,
 		blendMode: node.params.blendMode ?? "normal",
-		effectPassGroups: node.resolved.effectPasses,
+		effectPassGroups: node.resolved.effectPasses
+			.map((passes) =>
+				passes.filter((pass) => pass.shader !== HAND_DRAW_SHADER),
+			)
+			.filter((passes) => passes.length > 0),
 		mask,
 	});
 	if (strokeLayer) {
@@ -351,22 +380,24 @@ async function collectVisualSourceNode({
 	}
 }
 
-function collectActiveHandDrawPasses({
+function collectActiveHandDrawPass({
 	node,
 }: {
 	node: AnyBaseNode;
-}): EffectPass[] {
+}): EffectPass | null {
 	if (!(node instanceof RootNode)) {
-		return [];
+		return null;
 	}
 
-	return node.children.flatMap((child) =>
-		child instanceof EffectLayerNode
-			? (child.resolved?.passes ?? []).filter(
-					(pass) => pass.shader === HAND_DRAW_SHADER,
-				)
-			: [],
-	);
+	return node.children
+		.flatMap((child) =>
+			child instanceof EffectLayerNode
+				? (child.resolved?.passes ?? []).filter(
+						(pass) => pass.shader === HAND_DRAW_SHADER,
+					)
+				: [],
+		)
+		.at(-1) ?? null;
 }
 
 function drawHandDrawReveal({
@@ -383,13 +414,19 @@ function drawHandDrawReveal({
 	pass: EffectPass;
 }) {
 	const progress = clampUnit(pass.uniforms.u_progress);
+	const localTimeSeconds = Math.max(
+		0,
+		typeof pass.uniforms.u_local_time === "number"
+			? pass.uniforms.u_local_time
+			: 0,
+	);
 	const colorDelay = clampUnit(pass.uniforms.u_color_delay);
 	const roughness = clampUnit(pass.uniforms.u_roughness);
 	const lineStrength = clampUnit(pass.uniforms.u_line_strength);
-	const drawOrder = Math.round(
-		clampUnit(pass.uniforms.u_draw_order) * 3,
-	);
-	const drawRegions = readHandDrawRegions({ value: pass.uniforms.u_draw_regions });
+	const drawOrder = Math.round(clampUnit(pass.uniforms.u_draw_order) * 3);
+	const drawRegions = readHandDrawRegions({
+		value: pass.uniforms.u_draw_regions,
+	});
 	const sketch = getPencilSketch({
 		source,
 		width,
@@ -398,10 +435,16 @@ function drawHandDrawReveal({
 		drawOrder,
 		drawRegions,
 	});
-	// The renderer's final frame sits just before the timeline endpoint, so it
-	// does not always receive an exact progress of 1. Finish a little earlier
-	// to guarantee the pen is gone once the drawing is complete.
-	if (progress >= 0.985) {
+	const regionSpans = getDrawRegionSpans({
+		strokes: sketch.strokes,
+		width,
+		height,
+		regions: drawRegions,
+	});
+	// The legacy unpartitioned effect follows the layer duration. A partitioned
+	// effect instead follows its explicit per-region seconds, so resizing the
+	// layer never changes the speed of a completed or upcoming region.
+	if (regionSpans.length === 0 && progress >= 0.985) {
 		ctx.drawImage(source, 0, 0, width, height);
 		return;
 	}
@@ -412,18 +455,22 @@ function drawHandDrawReveal({
 	// small contours are visible in the first few frames to read as the whole
 	// picture. This timing instead behaves like a person finding the first line
 	// and building momentum while drawing it.
-	const drawingProgress = smoothStep({
-		edge0: 0.025,
-		edge1: 1,
-		value: progress,
-	}) ** 1.85;
-	const visiblePointCount = Math.ceil(drawingProgress * sketch.totalPoints);
-	const regionSpans = getDrawRegionSpans({
-		strokes: sketch.strokes,
-		width,
-		height,
-		regions: drawRegions,
+	const drawingProgress =
+		smoothStep({
+			edge0: 0.025,
+			edge1: 1,
+			value: progress,
+		}) ** 1.85;
+	const visiblePointCount = getTimedVisiblePointCount({
+		timeSeconds: localTimeSeconds,
+		fallbackProgress: drawingProgress,
+		totalPoints: sketch.totalPoints,
+		regionSpans,
 	});
+	if (regionSpans.length > 0 && visiblePointCount >= sketch.totalPoints) {
+		ctx.drawImage(source, 0, 0, width, height);
+		return;
+	}
 	const completedRegions = regionSpans
 		.filter((span) => visiblePointCount >= span.endPoint)
 		.map((span) => span.region);
@@ -478,18 +525,19 @@ function drawHandDrawReveal({
 			brushWidth * 3.5,
 			Math.min(width, height) / 155,
 		);
-		const paintMaskCanvas = regionPaintRanges.length > 0
-			? createPointRangeMask({
-					sketch,
-					ranges: regionPaintRanges,
-					lineWidth: paintLineWidth,
-				})
-			: updateProgressMask({
-					sketch,
-					kind: "paint",
-					pointCount: paintedPoints,
-					lineWidth: paintLineWidth,
-				});
+		const paintMaskCanvas =
+			regionPaintRanges.length > 0
+				? createPointRangeMask({
+						sketch,
+						ranges: regionPaintRanges,
+						lineWidth: paintLineWidth,
+					})
+				: updateProgressMask({
+						sketch,
+						kind: "paint",
+						pointCount: paintedPoints,
+						lineWidth: paintLineWidth,
+					});
 		const { canvas: colourCanvas, context: colourCtx } = createCanvasSurface({
 			width,
 			height,
@@ -517,7 +565,12 @@ function drawHandDrawReveal({
 	ctx.fillStyle = "#ffffff";
 	ctx.fillRect(0, 0, width, height);
 	ctx.drawImage(revealCanvas, 0, 0);
-	if (progress > 0 && progress < 1 && lastDrawnPoint) {
+	if (
+		(regionSpans.length > 0
+			? localTimeSeconds > 0 && visiblePointCount < sketch.totalPoints
+			: progress > 0 && progress < 1) &&
+		lastDrawnPoint
+	) {
 		drawMarkerPen({
 			ctx,
 			cursor: lastDrawnPoint,
@@ -546,8 +599,7 @@ function getPaintedPointCount({
 	const delayedProgress = smoothStep({
 		edge0: 0,
 		edge1: 1,
-		value:
-			(drawingProgress - colorDelay) / Math.max(0.001, 1 - colorDelay),
+		value: (drawingProgress - colorDelay) / Math.max(0.001, 1 - colorDelay),
 	});
 	const delayedPointCount = Math.ceil(delayedProgress * totalPoints);
 
@@ -595,6 +647,36 @@ function getDrawRegionSpans({
 		const span = spanByRegionOrder.get(region.order);
 		return span ? [span] : [];
 	});
+}
+
+function getTimedVisiblePointCount({
+	timeSeconds,
+	fallbackProgress,
+	totalPoints,
+	regionSpans,
+}: {
+	timeSeconds: number;
+	fallbackProgress: number;
+	totalPoints: number;
+	regionSpans: DrawRegionSpan[];
+}): number {
+	if (regionSpans.length === 0)
+		return Math.ceil(fallbackProgress * totalPoints);
+	let remaining = timeSeconds;
+	for (const [index, span] of regionSpans.entries()) {
+		const points = span.endPoint - span.startPoint;
+		if (remaining <= span.region.durationSeconds)
+			return Math.ceil(
+				span.startPoint +
+					points * Math.max(0, remaining / span.region.durationSeconds),
+			);
+		remaining -= span.region.durationSeconds;
+		if (index < regionSpans.length - 1 && remaining <= span.region.pauseSeconds) {
+			return span.endPoint;
+		}
+		remaining -= span.region.pauseSeconds;
+	}
+	return totalPoints;
 }
 
 function getRegionPaintRanges({
@@ -701,7 +783,8 @@ function getPencilSketch({
 	drawOrder: number;
 	drawRegions: HandDrawRegion[];
 }): PencilSketchCacheEntry {
-	const cacheKey = typeof source === "object" && source !== null ? source : null;
+	const cacheKey =
+		typeof source === "object" && source !== null ? source : null;
 	const regionsKey = JSON.stringify(drawRegions);
 	const cached = cacheKey ? pencilSketchCache.get(cacheKey) : undefined;
 	if (
@@ -732,12 +815,8 @@ function getPencilSketch({
 	for (let y = 1; y < height - 1; y++) {
 		for (let x = 1; x < width - 1; x++) {
 			const edge =
-				Math.abs(
-					luminanceAt({ x: x - 1, y }) - luminanceAt({ x: x + 1, y }),
-				) +
-				Math.abs(
-					luminanceAt({ x, y: y - 1 }) - luminanceAt({ x, y: y + 1 }),
-				);
+				Math.abs(luminanceAt({ x: x - 1, y }) - luminanceAt({ x: x + 1, y })) +
+				Math.abs(luminanceAt({ x, y: y - 1 }) - luminanceAt({ x, y: y + 1 }));
 			if (edge <= threshold) continue;
 			const pixel = (y * width + x) * 4;
 			const alpha = Math.min(255, Math.round((edge - threshold) * 4.2));
@@ -765,7 +844,10 @@ function getPencilSketch({
 		drawOrder,
 		regionsKey,
 		strokes,
-		totalPoints: strokes.reduce((total, stroke) => total + stroke.points.length, 0),
+		totalPoints: strokes.reduce(
+			(total, stroke) => total + stroke.points.length,
+			0,
+		),
 		lineMaskPoints: 0,
 		paintMaskPoints: 0,
 	};
@@ -813,7 +895,10 @@ function updateProgressMask({
 	let canvas = sketch[canvasKey];
 	let renderedPointCount = sketch[pointKey];
 	if (!canvas || pointCount < renderedPointCount) {
-		canvas = createCanvasSurface({ width: sketch.width, height: sketch.height }).canvas;
+		canvas = createCanvasSurface({
+			width: sketch.width,
+			height: sketch.height,
+		}).canvas;
 		renderedPointCount = 0;
 	}
 	if (pointCount > renderedPointCount) {
@@ -921,7 +1006,13 @@ function drawMarkerPen({
 	const barrelStart = size * 0.56;
 	ctx.fillStyle = "#fbfaf7";
 	ctx.beginPath();
-	ctx.roundRect(barrelStart, -size * 0.3, markerLength, size * 0.6, size * 0.18);
+	ctx.roundRect(
+		barrelStart,
+		-size * 0.3,
+		markerLength,
+		size * 0.6,
+		size * 0.18,
+	);
 	ctx.fill();
 	ctx.strokeStyle = "#25282d";
 	ctx.lineWidth = Math.max(0.75, size * 0.045);
@@ -937,9 +1028,19 @@ function drawMarkerPen({
 	);
 	ctx.fill();
 	ctx.fillStyle = "#cfa544";
-	ctx.fillRect(barrelStart + size * 0.25, -size * 0.31, size * 0.1, size * 0.62);
+	ctx.fillRect(
+		barrelStart + size * 0.25,
+		-size * 0.31,
+		size * 0.1,
+		size * 0.62,
+	);
 	ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-	ctx.fillRect(barrelStart + size * 0.58, -size * 0.16, markerLength * 0.45, size * 0.08);
+	ctx.fillRect(
+		barrelStart + size * 0.58,
+		-size * 0.16,
+		markerLength * 0.45,
+		size * 0.08,
+	);
 	ctx.restore();
 }
 
@@ -959,7 +1060,14 @@ function tracePencilStrokes({
 	const visited = new Uint8Array(edges.length);
 	const strokes: PencilStroke[] = [];
 	const neighbours = [
-		[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1],
+		[-1, -1],
+		[0, -1],
+		[1, -1],
+		[-1, 0],
+		[1, 0],
+		[-1, 1],
+		[0, 1],
+		[1, 1],
 	] as const;
 	for (let startY = 1; startY < height - 1; startY++) {
 		for (let startX = 1; startX < width - 1; startX++) {
@@ -1075,20 +1183,29 @@ function orderPencilStrokes({
 		splitStrokeIntoDrawingRows({ stroke, rowHeight }),
 	);
 	return orderedSlices.sort((left, right) => {
-		const leftRegion = findDrawRegion({ stroke: left, width, height, regions: drawRegions });
-		const rightRegion = findDrawRegion({ stroke: right, width, height, regions: drawRegions });
+		const leftRegion = findDrawRegion({
+			stroke: left,
+			width,
+			height,
+			regions: drawRegions,
+		});
+		const rightRegion = findDrawRegion({
+			stroke: right,
+			width,
+			height,
+			regions: drawRegions,
+		});
 		if (leftRegion?.order !== rightRegion?.order) {
-			return (leftRegion?.order ?? Number.MAX_SAFE_INTEGER) - (rightRegion?.order ?? Number.MAX_SAFE_INTEGER);
+			return (
+				(leftRegion?.order ?? Number.MAX_SAFE_INTEGER) -
+				(rightRegion?.order ?? Number.MAX_SAFE_INTEGER)
+			);
 		}
 		const activeDrawOrder = leftRegion?.drawOrder ?? drawOrder;
-		const leftRow = Math.floor(((left.minY + left.maxY) / 2) / rowHeight);
-		const rightRow = Math.floor(((right.minY + right.maxY) / 2) / rowHeight);
-		const leftColumn = Math.floor(
-			((left.minX + left.maxX) / 2) / columnWidth,
-		);
-		const rightColumn = Math.floor(
-			((right.minX + right.maxX) / 2) / columnWidth,
-		);
+		const leftRow = Math.floor((left.minY + left.maxY) / 2 / rowHeight);
+		const rightRow = Math.floor((right.minY + right.maxY) / 2 / rowHeight);
+		const leftColumn = Math.floor((left.minX + left.maxX) / 2 / columnWidth);
+		const rightColumn = Math.floor((right.minX + right.maxX) / 2 / columnWidth);
 		const columnDirection = activeDrawOrder === 1 ? -1 : 1;
 		const rowDirection = activeDrawOrder === 3 ? -1 : 1;
 		const columnFirst = activeDrawOrder === 0 || activeDrawOrder === 1;
@@ -1157,7 +1274,12 @@ function createPencilStroke({
 			minY: Math.min(result.minY, point.y),
 			maxY: Math.max(result.maxY, point.y),
 		}),
-		{ minX: points[0].x, maxX: points[0].x, minY: points[0].y, maxY: points[0].y },
+		{
+			minX: points[0].x,
+			maxX: points[0].x,
+			minY: points[0].y,
+			maxY: points[0].y,
+		},
 	);
 	return { points, ...bounds };
 }
@@ -1187,9 +1309,24 @@ function readHandDrawRegions({
 }): HandDrawRegion[] {
 	if (!Array.isArray(value)) return [];
 	const regions: HandDrawRegion[] = [];
-	for (let index = 0; index + 5 < value.length; index += 6) {
-		const [x, y, width, height, order, drawOrder] = value.slice(index, index + 6);
-		if (![x, y, width, height, order, drawOrder].every(Number.isFinite)) continue;
+	const stride = value.length % 8 === 0 ? 8 : 7;
+	for (let index = 0; index + stride - 1 < value.length; index += stride) {
+		const [
+			x,
+			y,
+			width,
+			height,
+			order,
+			drawOrder,
+			durationSeconds = 0.5,
+			pauseSeconds = 0,
+		] = value.slice(index, index + stride);
+		if (
+			![x, y, width, height, order, drawOrder, durationSeconds, pauseSeconds].every(
+				Number.isFinite,
+			)
+		)
+			continue;
 		regions.push({
 			x: clampUnit(x),
 			y: clampUnit(y),
@@ -1197,6 +1334,8 @@ function readHandDrawRegions({
 			height: Math.min(1, Math.max(0.01, height)),
 			order: Math.max(1, Math.round(order)),
 			drawOrder: Math.min(3, Math.max(0, Math.round(drawOrder))),
+			durationSeconds: Math.max(0.1, durationSeconds),
+			pauseSeconds: Math.max(0, pauseSeconds),
 		});
 	}
 	return regions.sort((left, right) => left.order - right.order);

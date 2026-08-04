@@ -99,6 +99,7 @@ export function buildSeparatedAudioElement({
 			? {
 					rate: sourceElement.retime.rate,
 					maintainPitch: sourceElement.retime.maintainPitch,
+					pitchSemitones: sourceElement.retime.pitchSemitones,
 				}
 			: undefined,
 		animations: cloneVolumeAnimations({
@@ -112,9 +113,7 @@ export function getSourceAudioActionLabel({
 }: {
 	element: VideoElement;
 }): "分离音频" | "合并音频" {
-	return isSourceAudioSeparated({ element })
-		? "合并音频"
-		: "分离音频";
+	return isSourceAudioSeparated({ element }) ? "合并音频" : "分离音频";
 }
 
 function cloneVolumeAnimations({

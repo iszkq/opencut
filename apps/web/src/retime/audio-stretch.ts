@@ -1,5 +1,10 @@
 import { PitchShifter } from "soundtouchjs";
-import { clampRetimeRate, shouldMaintainPitch } from "@/retime/rate";
+import {
+	clampPitchSemitones,
+	clampRetimeRate,
+	hasPitchShift,
+	shouldMaintainPitch,
+} from "@/retime/rate";
 import type { RetimeConfig } from "@/timeline";
 import { getSourceTimeAtClipTime } from "./resolve";
 
@@ -67,17 +72,19 @@ function buildResampledBuffer({
 	return outputBuffer;
 }
 
-async function buildPitchPreservedBuffer({
+async function buildSoundTouchBuffer({
 	sourceBuffer,
 	trimStart,
 	clipDuration,
 	rate,
+	pitchSemitones,
 	targetSampleRate,
 }: {
 	sourceBuffer: AudioBuffer;
 	trimStart: number;
 	clipDuration: number;
 	rate: number;
+	pitchSemitones: number;
 	targetSampleRate: number;
 }): Promise<AudioBuffer> {
 	const nativeSampleRate = sourceBuffer.sampleRate;
@@ -124,10 +131,7 @@ async function buildPitchPreservedBuffer({
 	resampleSourceNode.start(0);
 	const resampledBuffer = await resampleCtx.startRendering();
 
-	const outputSamples = Math.max(
-		1,
-		Math.ceil(clipDuration * targetSampleRate),
-	);
+	const outputSamples = Math.max(1, Math.ceil(clipDuration * targetSampleRate));
 	const stretchCtx = new OfflineAudioContext(
 		numChannels,
 		outputSamples,
@@ -135,7 +139,7 @@ async function buildPitchPreservedBuffer({
 	);
 	const shifter = new PitchShifter(stretchCtx, resampledBuffer, 4096);
 	shifter.tempo = rate;
-	shifter.pitch = 1;
+	shifter.pitch = 2 ** (pitchSemitones / 12);
 	shifter.connect(stretchCtx.destination);
 	return stretchCtx.startRendering();
 }
@@ -157,16 +161,22 @@ export async function renderRetimedBuffer({
 }): Promise<AudioBuffer> {
 	const targetSampleRate = audioContext.sampleRate;
 	const rate = clampRetimeRate({ rate: retime?.rate ?? 1 });
+	const pitchSemitones = clampPitchSemitones({
+		semitones: retime?.pitchSemitones ?? 0,
+	});
 	const usePitchPreservation =
 		shouldMaintainPitch({ rate, maintainPitch }) &&
 		Math.abs(rate - 1) > RATE_EPSILON;
+	const useSoundTouch =
+		usePitchPreservation || hasPitchShift({ semitones: pitchSemitones });
 
-	if (usePitchPreservation) {
-		return buildPitchPreservedBuffer({
+	if (useSoundTouch) {
+		return buildSoundTouchBuffer({
 			sourceBuffer,
 			trimStart,
 			clipDuration,
 			rate,
+			pitchSemitones,
 			targetSampleRate,
 		});
 	}

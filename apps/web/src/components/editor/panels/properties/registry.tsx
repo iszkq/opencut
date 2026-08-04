@@ -23,9 +23,13 @@ import {
 	DashboardSpeed02Icon,
 } from "@hugeicons/core-free-icons";
 import { ElementParamsTab } from "./components/element-params-tab";
-import { ClipEffectsTab, StandaloneEffectTab } from "@/effects/components/effects-tab";
+import {
+	ClipEffectsTab,
+	StandaloneEffectTab,
+} from "@/effects/components/effects-tab";
 import { MasksTab } from "@/masks/components/masks-tab";
 import { SpeedTab } from "@/speed/components/speed-tab";
+import { AudioClipControls } from "./components/audio-clip-controls";
 import { GraphicTab } from "@/graphics/components/graphic-tab";
 import { OcShapesIcon } from "@/components/icons";
 
@@ -124,14 +128,21 @@ function buildAudioTab({
 		id: "audio",
 		label: "音频",
 		icon: <HugeiconsIcon icon={MusicNote03Icon} size={16} />,
-		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
-				trackId={trackId}
-				paramKeys={AUDIO_PARAM_KEYS}
-				sectionKey="audio"
-			/>
-		),
+		content: ({ trackId }) =>
+			element.type === "audio" ? (
+				<AudioClipControls
+					key={element.id}
+					element={element}
+					trackId={trackId}
+				/>
+			) : (
+				<ElementParamsTab
+					element={element}
+					trackId={trackId}
+					paramKeys={AUDIO_PARAM_KEYS}
+					sectionKey="audio"
+				/>
+			),
 	};
 }
 
@@ -201,7 +212,9 @@ function buildGraphicTab({
 		id: "graphic",
 		label: "图形",
 		icon: <OcShapesIcon size={16} />,
-		content: ({ trackId }) => <GraphicTab element={element} trackId={trackId} />,
+		content: ({ trackId }) => (
+			<GraphicTab element={element} trackId={trackId} />
+		),
 	};
 }
 
@@ -311,7 +324,7 @@ function getAudioConfig({
 }): ElementPropertiesConfig {
 	return {
 		defaultTab: "audio",
-		tabs: [buildAudioTab({ element }), buildSpeedTab({ element })],
+		tabs: [buildAudioTab({ element })],
 	};
 }
 

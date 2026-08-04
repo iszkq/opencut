@@ -82,6 +82,8 @@ export interface SceneTracks {
 export interface RetimeConfig {
 	rate: number;
 	maintainPitch?: boolean;
+	/** Independent pitch shift in semitones, from -12 to +12. */
+	pitchSemitones?: number;
 }
 
 interface BaseAudioElement extends BaseTimelineElement {

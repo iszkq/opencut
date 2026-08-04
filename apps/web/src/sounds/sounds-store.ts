@@ -3,8 +3,14 @@ import type { SoundEffect, SavedSound } from "@/sounds/types";
 import { storageService } from "@/services/storage/service";
 import { toast } from "sonner";
 import { EditorCore } from "@/core";
-import { buildLibraryAudioElement } from "@/timeline/element-utils";
+import {
+	buildElementFromMedia,
+	buildLibraryAudioElement,
+} from "@/timeline/element-utils";
+import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
 import { mediaTimeFromSeconds } from "@/wasm";
+import { processMediaAssets } from "@/media/processing";
+import type { MediaAsset } from "@/media/types";
 
 interface SoundsStore {
 	topSoundEffects: SoundEffect[];
@@ -222,6 +228,54 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 				throw new Error(`Failed to download audio: ${response.statusText}`);
 
 			const arrayBuffer = await response.arrayBuffer();
+
+			// Bundled sounds should behave exactly like an imported file: they appear
+			// in Media as well as on the timeline, and travel with an exported project.
+			if (sound.id < 0) {
+				const activeProject = editor.project.getActiveOrNull();
+				if (!activeProject) throw new Error("请先打开一个项目");
+
+				const existingAsset = editor.media
+					.getAssets()
+					.find((asset) => asset.name === sound.filename);
+				let savedAsset: MediaAsset | null | undefined = existingAsset;
+
+				if (!savedAsset) {
+					const file = new File(
+						[arrayBuffer],
+						sound.filename ?? `${sound.name}.wav`,
+						{
+							type: "audio/wav",
+						},
+					);
+					const processed = await processMediaAssets({ files: [file] });
+					const asset = processed[0];
+					if (!asset) throw new Error("内置音效导入失败");
+					savedAsset = await editor.media.addMediaAsset({
+						projectId: activeProject.metadata.id,
+						asset,
+					});
+				}
+
+				if (!savedAsset) throw new Error("内置音效保存失败");
+				const duration =
+					typeof savedAsset.duration === "number" && savedAsset.duration > 0
+						? mediaTimeFromSeconds({ seconds: savedAsset.duration })
+						: DEFAULT_NEW_ELEMENT_DURATION;
+				const element = buildElementFromMedia({
+					mediaId: savedAsset.id,
+					mediaType: savedAsset.type,
+					name: sound.name,
+					duration,
+					startTime: currentTime,
+				});
+				editor.timeline.insertElement({
+					placement: { mode: "auto", trackType: "audio" },
+					element,
+				});
+				return true;
+			}
+
 			const audioContext = new AudioContext();
 			const buffer = await audioContext.decodeAudioData(arrayBuffer);
 

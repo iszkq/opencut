@@ -3,6 +3,7 @@ import {
 	handDrawDirectionCode,
 	parseHandDrawRegions,
 } from "@/effects/hand-draw-regions";
+import { mediaTimeToSeconds } from "@/wasm";
 
 export const HAND_DRAW_SHADER = "hand-draw";
 
@@ -33,7 +34,11 @@ function clamp({
 	return Math.min(Math.max(value, min), max);
 }
 
-function drawOrderParam({ params }: { params: Record<string, unknown> }): number {
+function drawOrderParam({
+	params,
+}: {
+	params: Record<string, unknown>;
+}): number {
 	// The renderer only accepts numeric uniforms. Keep the user-facing option a
 	// descriptive string and map it to a stable ordering code here.
 	switch (params.drawOrder) {
@@ -48,15 +53,23 @@ function drawOrderParam({ params }: { params: Record<string, unknown> }): number
 	}
 }
 
-function drawRegionsParam({ params }: { params: Record<string, unknown> }): number[] {
-	return parseHandDrawRegions({ value: params.drawRegions }).flatMap((region) => [
-		region.x,
-		region.y,
-		region.width,
-		region.height,
-		region.order,
-		handDrawDirectionCode({ direction: region.direction }),
-	]);
+function drawRegionsParam({
+	params,
+}: {
+	params: Record<string, unknown>;
+}): number[] {
+	return parseHandDrawRegions({ value: params.drawRegions }).flatMap(
+		(region) => [
+			region.x,
+			region.y,
+			region.width,
+			region.height,
+			region.order,
+			handDrawDirectionCode({ direction: region.direction }),
+			region.durationSeconds,
+			region.pauseSeconds,
+		],
+	);
 }
 
 function buildHandDrawPasses({
@@ -81,6 +94,13 @@ function buildHandDrawPasses({
 			shader: HAND_DRAW_SHADER,
 			uniforms: {
 				u_progress: progress,
+				// Region timings are expressed in real seconds. Keep this separate
+				// from u_progress, which intentionally follows the effect layer's
+				// length for the legacy, unpartitioned hand-draw animation.
+				u_local_time:
+					localTime == null
+						? Number.MAX_SAFE_INTEGER
+						: mediaTimeToSeconds({ time: localTime }),
 				u_draw_order: drawOrderParam({ params: effectParams }) / 3,
 				u_draw_regions: drawRegionsParam({ params: effectParams }),
 				u_line_strength: clamp({

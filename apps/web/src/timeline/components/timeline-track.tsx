@@ -12,7 +12,7 @@ interface TimelineTrackContentProps {
 	zoomLevel: number;
 	dragView: ElementDragView;
 	onResizeStart: (params: {
-		event: React.MouseEvent;
+		event: React.PointerEvent;
 		element: TimelineElementType;
 		track: TimelineTrack;
 		side: "left" | "right";

@@ -67,6 +67,10 @@ import { RenameProjectDialog } from "@/project/components/rename-project-dialog"
 import { cn } from "@/utils/ui";
 import { ChangelogNotification } from "@/changelog/components/changelog-notification";
 import { CreateProjectDialog } from "@/project/components/create-project-dialog";
+import {
+	importPortableProject,
+	pickPortableProjectFile,
+} from "@/project/portable-project";
 const formatProjectDuration = ({
 	duration,
 }: {
@@ -184,11 +188,47 @@ function ProjectsHeader() {
 
 				<div className="flex items-center gap-3 md:gap-4">
 					<SearchBar className="hidden md:block" />
+					<ImportProjectButton />
 					<NewProjectButton />
 				</div>
 			</div>
 			<SearchBar className="block md:hidden mb-4" />
 		</header>
+	);
+}
+
+function ImportProjectButton() {
+	const editor = useEditor();
+	const router = useRouter();
+	const [isImporting, setIsImporting] = useState(false);
+
+	const importProject = async () => {
+		if (isImporting) return;
+		setIsImporting(true);
+		try {
+			const file = await pickPortableProjectFile();
+			if (!file) return;
+			const projectId = await importPortableProject({ file });
+			await editor.project.loadAllProjects();
+			toast.success("工程已导入，正在打开");
+			router.push(`/editor/${projectId}`);
+		} catch (error) {
+			toast.error("导入工程文件失败", {
+				description: error instanceof Error ? error.message : undefined,
+			});
+		} finally {
+			setIsImporting(false);
+		}
+	};
+
+	return (
+		<Button
+			variant="outline"
+			onClick={() => void importProject()}
+			disabled={isImporting}
+		>
+			{isImporting ? "正在导入…" : "导入工程"}
+		</Button>
 	);
 }
 
@@ -242,9 +282,7 @@ function ProjectsToolbar({ projectIds }: { projectIds: string[] }) {
 							handleSelectAll({ checked: checked === true })
 						}
 					/>
-					<span className="text-muted-foreground hidden md:block">
-						全选
-					</span>
+					<span className="text-muted-foreground hidden md:block">全选</span>
 				</Label>
 
 				<div className="h-4 w-px bg-border/50" />
@@ -331,7 +369,7 @@ function SearchBar({
 						aria-hidden="true"
 					/>
 					<Input
-							placeholder="搜索…"
+						placeholder="搜索…"
 						value={searchQuery}
 						onChange={(event) => setSearchQuery({ query: event.target.value })}
 						size="lg"
@@ -479,25 +517,25 @@ function SortDropdown({ children }: { children: React.ReactNode }) {
 					checked={sortKey === "createdAt"}
 					onCheckedChange={() => setSortKey({ sortKey: "createdAt" })}
 				>
-									创建时间
+					创建时间
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={sortKey === "updatedAt"}
 					onCheckedChange={() => setSortKey({ sortKey: "updatedAt" })}
 				>
-									修改时间
+					修改时间
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={sortKey === "name"}
 					onCheckedChange={() => setSortKey({ sortKey: "name" })}
 				>
-									名称
+					名称
 				</DropdownMenuCheckboxItem>
 				<DropdownMenuCheckboxItem
 					checked={sortKey === "duration"}
 					onCheckedChange={() => setSortKey({ sortKey: "duration" })}
 				>
-									时长
+					时长
 				</DropdownMenuCheckboxItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
@@ -518,7 +556,11 @@ function NewProjectButton() {
 
 	return (
 		<>
-			<Button size="lg" className="flex px-5 md:px-6" onClick={() => setIsOpen(true)}>
+			<Button
+				size="lg"
+				className="flex px-5 md:px-6"
+				onClick={() => setIsOpen(true)}
+			>
 				<span className="text-sm font-medium hidden md:block">新建项目</span>
 				<span className="text-sm font-medium block md:hidden">新建</span>
 			</Button>
@@ -599,7 +641,9 @@ function ProjectItem({
 								alt=""
 								className="size-10 shrink-0 rounded-lg"
 							/>
-							<span className="line-clamp-2 text-sm font-medium">{project.name}</span>
+							<span className="line-clamp-2 text-sm font-medium">
+								{project.name}
+							</span>
 						</div>
 					)}
 				</div>
@@ -617,7 +661,7 @@ function ProjectItem({
 				</h3>
 				<div className="text-muted-foreground flex items-center gap-1.5 text-sm">
 					<HugeiconsIcon icon={Calendar04Icon} className="size-4" />
-							<span>创建于 {formatDate({ date: project.createdAt })}</span>
+					<span>创建于 {formatDate({ date: project.createdAt })}</span>
 				</div>
 			</CardContent>
 		</Card>

@@ -5,7 +5,7 @@ import type {
 	RetimeConfig,
 	SceneTracks,
 } from "@/timeline";
-import { shouldMaintainPitch } from "@/retime/rate";
+import { shouldRenderRetimeAudio } from "@/retime/rate";
 import type { MediaAsset } from "@/media/types";
 import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
 import type { AudioCapableElement } from "@/timeline/audio-state";
@@ -21,10 +21,7 @@ import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { TICKS_PER_SECOND } from "@/wasm";
-import {
-	computeRmsBuckets,
-	type SampleBucket,
-} from "@/media/waveform-summary";
+import { computeRmsBuckets, type SampleBucket } from "@/media/waveform-summary";
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
@@ -657,9 +654,10 @@ export async function createTimelineAudioBuffer({
 	for (const element of audioElements) {
 		if (element.muted) continue;
 
-		const renderedBuffer = shouldMaintainPitch({
+		const renderedBuffer = shouldRenderRetimeAudio({
 			rate: element.retime?.rate ?? 1,
 			maintainPitch: element.retime?.maintainPitch,
+			pitchSemitones: element.retime?.pitchSemitones,
 		})
 			? await renderRetimedBuffer({
 					audioContext: context,

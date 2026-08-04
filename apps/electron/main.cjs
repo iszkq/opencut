@@ -498,6 +498,10 @@ const TTS_MODEL_URL =
 	"https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2";
 const TTS_MODEL_FILE = "kokoro-int8-multi-lang-v1_1.tar.bz2";
 const CLOUD_TTS_DIRECT_ENDPOINT = "https://aihubmix.com/v1/audio/speech";
+// This desktop build uses the project's managed Edge TTS Worker directly.
+// It is intentionally not editable in the renderer, so end users only see
+// the dubbing controls rather than deployment details.
+const BUILT_IN_EDGE_TTS_ENDPOINT = "https://tts.221819.best/v1/audio/speech";
 // This public bootstrap document contains only the Worker URL and feature
 // switch. It deliberately never contains an API key, so the Worker can be
 // reconfigured without publishing another desktop build.
@@ -524,6 +528,22 @@ function getTtsModelsDirectory() {
 
 function getCloudTtsKeyPath() {
 	return path.join(app.getPath("userData"), "credentials", "aihubmix-tts.key");
+}
+
+function getSelfHostedEdgeTtsConfigPath() {
+	return path.join(
+		app.getPath("userData"),
+		"credentials",
+		"self-hosted-edge-tts.json",
+	);
+}
+
+function getSelfHostedEdgeTtsKeyPath() {
+	return path.join(
+		app.getPath("userData"),
+		"credentials",
+		"self-hosted-edge-tts.key",
+	);
 }
 
 function getBundledCloudTtsApiKey() {
@@ -597,6 +617,79 @@ function normalizeCloudTtsEndpoint(value) {
 	} catch {
 		return null;
 	}
+}
+
+function normalizeSelfHostedEdgeTtsEndpoint(value) {
+	if (typeof value !== "string" || value.length > 500) return null;
+	try {
+		const url = new URL(value.trim());
+		if (url.protocol !== "https:" || url.username || url.password) return null;
+		url.hash = "";
+		url.search = "";
+		const pathname = url.pathname.replace(/\/+$/, "");
+		if (!pathname.endsWith("/v1/audio/speech")) {
+			url.pathname = `${pathname}/v1/audio/speech`;
+		} else {
+			url.pathname = pathname;
+		}
+		return url.toString();
+	} catch {
+		return null;
+	}
+}
+
+async function getSelfHostedEdgeTtsConfig() {
+	try {
+		const raw = await fsp.readFile(getSelfHostedEdgeTtsConfigPath(), "utf8");
+		const endpoint = normalizeSelfHostedEdgeTtsEndpoint(
+			JSON.parse(raw)?.endpoint,
+		);
+		return endpoint ? { endpoint } : null;
+	} catch {
+		return null;
+	}
+}
+
+function getSelfHostedEdgeTtsApiKey() {
+	try {
+		if (
+			safeStorage.isEncryptionAvailable() &&
+			fs.existsSync(getSelfHostedEdgeTtsKeyPath())
+		) {
+			return safeStorage.decryptString(
+				fs.readFileSync(getSelfHostedEdgeTtsKeyPath()),
+			);
+		}
+	} catch {
+		// Treat an unreadable local key as absent rather than exposing it.
+	}
+	return "";
+}
+
+async function saveSelfHostedEdgeTtsConfig(payload) {
+	const endpoint = normalizeSelfHostedEdgeTtsEndpoint(payload?.endpoint);
+	if (!endpoint) throw new Error("请填写有效的 HTTPS Worker 地址。");
+	const apiKey = String(payload?.apiKey || "").trim();
+	if (apiKey.length > 500) throw new Error("API Key 长度无效。");
+	if (apiKey && !safeStorage.isEncryptionAvailable()) {
+		throw new Error(
+			"当前系统无法安全保存 API Key，请检查 Windows 凭据加密服务。",
+		);
+	}
+	const configPath = getSelfHostedEdgeTtsConfigPath();
+	await fsp.mkdir(path.dirname(configPath), { recursive: true });
+	await fsp.writeFile(configPath, JSON.stringify({ endpoint }), "utf8");
+	if (apiKey) {
+		await fsp.writeFile(
+			getSelfHostedEdgeTtsKeyPath(),
+			safeStorage.encryptString(apiKey),
+		);
+	}
+	return {
+		configured: true,
+		endpoint,
+		hasApiKey: Boolean(getSelfHostedEdgeTtsApiKey()),
+	};
 }
 
 async function fetchCloudTtsServiceConfig() {
@@ -1046,6 +1139,101 @@ async function generateCloudTts(payload) {
 	}
 }
 
+async function generateSelfHostedEdgeTts(payload) {
+	const text = String(payload?.text || "").trim();
+	const voice = String(payload?.voice || "").trim();
+	const speed = Number(payload?.speed ?? 1);
+	const pitch = Number(payload?.pitch ?? 0);
+	const style = String(payload?.style || "general").trim();
+	if (!text) throw new Error("请输入需要配音的文字。");
+	if (text.length > 2000)
+		throw new Error("单次配音最多支持 2000 个字符，请分段生成。");
+	if (!voice || voice.length > 100)
+		throw new Error("请选择或输入有效的 Edge 音色。");
+	if (!Number.isFinite(speed) || speed < 0.5 || speed > 2)
+		throw new Error("语速必须在 0.5 到 2 之间。");
+	if (!Number.isFinite(pitch) || pitch < -50 || pitch > 50)
+		throw new Error("音调必须在 -50 到 50 之间。");
+	if (!/^[a-zA-Z0-9_-]{1,40}$/.test(style))
+		throw new Error("语音风格格式无效。");
+	const temporaryDirectory = await fsp.mkdtemp(
+		path.join(app.getPath("temp"), "opencut-edge-tts-"),
+	);
+	try {
+		const requestPath = path.join(temporaryDirectory, "request.json");
+		const responsePath = path.join(temporaryDirectory, "speech.mp3");
+		await fsp.writeFile(
+			requestPath,
+			JSON.stringify({
+				input: text,
+				voice,
+				speed,
+				pitch: String(pitch),
+				style,
+			}),
+			"utf8",
+		);
+		const args = [
+			"--silent",
+			"--show-error",
+			"--fail-with-body",
+			"--location",
+			"--connect-timeout",
+			"12",
+			"--max-time",
+			"45",
+			"--header",
+			"Content-Type: application/json",
+		];
+		if (process.platform === "win32" && (await isLocalProxyAvailable()))
+			args.push("--proxy", "http://127.0.0.1:7897");
+		args.push(
+			"--data-binary",
+			`@${requestPath}`,
+			"--output",
+			responsePath,
+			BUILT_IN_EDGE_TTS_ENDPOINT,
+		);
+		try {
+			await execFileAsync("curl.exe", args, {
+				windowsHide: true,
+				maxBuffer: 1024 * 1024,
+			});
+		} catch {
+			let detail = "请检查网络、限流或音色设置后重试。";
+			try {
+				detail =
+					(await fsp.readFile(responsePath, "utf8"))
+						.replace(/\s+/g, " ")
+						.slice(0, 500) || detail;
+			} catch {
+				// Keep the safe fallback when the request never wrote a response.
+			}
+			throw new Error(`角色配音服务请求失败：${detail}`);
+		}
+		const bytes = await fsp.readFile(responsePath);
+		if (bytes.length < 256 || bytes.length > 100 * 1024 * 1024)
+			throw new Error("角色配音服务未返回可用音频。");
+		const audioFormat = detectGeneratedAudioFormat(bytes);
+		const outputDirectory = path.join(
+			app.getPath("userData"),
+			"generated-audio",
+		);
+		await fsp.mkdir(outputDirectory, { recursive: true });
+		const name = `自建配音-${new Date().toISOString().replace(/[:.]/g, "-")}.${audioFormat.extension}`;
+		const outputPath = path.join(outputDirectory, name);
+		await fsp.writeFile(outputPath, bytes);
+		return {
+			name,
+			base64: bytes.toString("base64"),
+			mimeType: audioFormat.mimeType,
+			path: outputPath,
+		};
+	} finally {
+		await fsp.rm(temporaryDirectory, { recursive: true, force: true });
+	}
+}
+
 ipcMain.handle("opencut:tts-status", async () => ({
 	ready: await hasTtsModel(),
 	downloading: Boolean(ttsDownloadPromise),
@@ -1069,6 +1257,22 @@ ipcMain.handle("opencut:tts-cloud-save-key", async (_event, payload) =>
 );
 ipcMain.handle("opencut:tts-cloud-generate", async (_event, payload) =>
 	generateCloudTts(payload),
+);
+ipcMain.handle("opencut:tts-self-hosted-edge-status", async () => {
+	const config = await getSelfHostedEdgeTtsConfig();
+	return {
+		configured: Boolean(config),
+		endpoint: config?.endpoint || "",
+		hasApiKey: Boolean(getSelfHostedEdgeTtsApiKey()),
+	};
+});
+ipcMain.handle(
+	"opencut:tts-self-hosted-edge-save-config",
+	async (_event, payload) => saveSelfHostedEdgeTtsConfig(payload),
+);
+ipcMain.handle(
+	"opencut:tts-self-hosted-edge-generate",
+	async (_event, payload) => generateSelfHostedEdgeTts(payload),
 );
 
 const CONVERSION_PROFILES = {
@@ -1328,6 +1532,48 @@ ipcMain.handle("opencut:select-conversion-files", async () => {
 ipcMain.handle("opencut:convert-media", async (_event, payload) =>
 	convertNativeMedia(payload),
 );
+
+function projectPackageData(value) {
+	if (value instanceof ArrayBuffer) return Buffer.from(value);
+	if (ArrayBuffer.isView(value)) {
+		return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+	}
+	throw new Error("工程文件数据无效。");
+}
+
+ipcMain.handle("opencut:save-project-package", async (_event, payload) => {
+	const data = projectPackageData(payload?.data);
+	if (data.length === 0 || data.length > 2 * 1024 * 1024 * 1024) {
+		throw new Error("工程文件为空或超过 2GB，无法保存。");
+	}
+	const save = await dialog.showSaveDialog({
+		title: "导出工程文件",
+		defaultPath: `${safeExportName(payload?.projectName)}.opencut`,
+		filters: [{ name: "OpenCut 工程文件", extensions: ["opencut"] }],
+	});
+	if (save.canceled || !save.filePath) return { cancelled: true };
+	await fsp.writeFile(save.filePath, data);
+	return { outputPath: save.filePath };
+});
+
+ipcMain.handle("opencut:open-project-package", async () => {
+	const selection = await dialog.showOpenDialog({
+		title: "导入工程文件",
+		properties: ["openFile"],
+		filters: [{ name: "OpenCut 工程文件", extensions: ["opencut"] }],
+	});
+	if (selection.canceled || !selection.filePaths[0]) return { cancelled: true };
+	const filePath = selection.filePaths[0];
+	const stat = await fsp.stat(filePath);
+	if (stat.size === 0 || stat.size > 2 * 1024 * 1024 * 1024) {
+		throw new Error("工程文件为空或超过 2GB，无法导入。");
+	}
+	const data = await fsp.readFile(filePath);
+	return {
+		name: path.basename(filePath),
+		data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+	};
+});
 
 function quoteConcatPath(filePath) {
 	return path.resolve(filePath).replace(/\\/g, "/").replace(/'/g, "'\\''");

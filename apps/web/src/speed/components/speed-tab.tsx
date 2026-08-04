@@ -7,8 +7,12 @@ import { DashboardSpeed02Icon } from "@hugeicons/core-free-icons";
 import { buildConstantRetime } from "@/retime";
 import {
 	DEFAULT_RETIME_RATE,
+	DEFAULT_PITCH_SEMITONES,
+	MIN_PITCH_SEMITONES,
+	MAX_PITCH_SEMITONES,
 	MIN_RETIME_RATE,
 	MAX_RETIME_RATE,
+	clampPitchSemitones,
 	clampRetimeRate,
 	canMaintainPitch,
 } from "@/retime/rate";
@@ -30,6 +34,8 @@ import {
 
 const SPEED_STEP = 0.01;
 const SPEED_FRACTION_DIGITS = getFractionDigitsForStep({ step: SPEED_STEP });
+const PITCH_STEP = 0.1;
+const PITCH_FRACTION_DIGITS = getFractionDigitsForStep({ step: PITCH_STEP });
 
 function rateToDisplay({ rate }: { rate: number }): string {
 	return formatNumberForDisplay({
@@ -46,15 +52,30 @@ function parseSpeedInput({ input }: { input: string }): number | null {
 	});
 }
 
+function parsePitchInput({ input }: { input: string }): number | null {
+	const parsed = parseFloat(input);
+	if (Number.isNaN(parsed)) return null;
+	return clampPitchSemitones({
+		semitones: snapToStep({ value: parsed, step: PITCH_STEP }),
+	});
+}
+
 function buildRetime({
 	rate,
 	maintainPitch,
+	pitchSemitones,
 }: {
 	rate: number;
 	maintainPitch: boolean;
+	pitchSemitones: number;
 }) {
-	if (rate === DEFAULT_RETIME_RATE && !maintainPitch) return undefined;
-	return buildConstantRetime({ rate, maintainPitch });
+	if (
+		rate === DEFAULT_RETIME_RATE &&
+		!maintainPitch &&
+		pitchSemitones === DEFAULT_PITCH_SEMITONES
+	)
+		return undefined;
+	return buildConstantRetime({ rate, maintainPitch, pitchSemitones });
 }
 
 export function SpeedTab({
@@ -70,19 +91,29 @@ export function SpeedTab({
 	});
 	const isPitchPreserveAvailable = canMaintainPitch({ rate });
 	const maintainPitch = element.retime?.maintainPitch ?? false;
+	const pitchSemitones = clampPitchSemitones({
+		semitones: element.retime?.pitchSemitones ?? DEFAULT_PITCH_SEMITONES,
+	});
 	const pendingRateRef = useRef(rate);
+	const pendingPitchRef = useRef(pitchSemitones);
 
 	const commitRetime = ({
 		rate: nextRate,
 		maintainPitch: nextMaintainPitch,
+		pitchSemitones: nextPitchSemitones,
 	}: {
 		rate: number;
 		maintainPitch: boolean;
+		pitchSemitones: number;
 	}) => {
 		editor.timeline.updateElementRetime({
 			trackId,
 			elementId: element.id,
-			retime: buildRetime({ rate: nextRate, maintainPitch: nextMaintainPitch }),
+			retime: buildRetime({
+				rate: nextRate,
+				maintainPitch: nextMaintainPitch,
+				pitchSemitones: nextPitchSemitones,
+			}),
 		});
 	};
 
@@ -97,14 +128,55 @@ export function SpeedTab({
 						trackId,
 						elementId: element.id,
 						updates: {
-							retime: buildRetime({ rate: nextRate, maintainPitch }),
+							retime: buildRetime({
+								rate: nextRate,
+								maintainPitch,
+								pitchSemitones,
+							}),
 						},
 					},
 				],
 			});
 		},
 		onCommit: () => {
-			commitRetime({ rate: pendingRateRef.current, maintainPitch });
+			commitRetime({
+				rate: pendingRateRef.current,
+				maintainPitch,
+				pitchSemitones,
+			});
+		},
+	});
+
+	const pitchDraft = usePropertyDraft({
+		displayValue: formatNumberForDisplay({
+			value: pitchSemitones,
+			fractionDigits: PITCH_FRACTION_DIGITS,
+		}),
+		parse: (input) => parsePitchInput({ input }),
+		onPreview: (nextPitchSemitones) => {
+			pendingPitchRef.current = nextPitchSemitones;
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							retime: buildRetime({
+								rate,
+								maintainPitch,
+								pitchSemitones: nextPitchSemitones,
+							}),
+						},
+					},
+				],
+			});
+		},
+		onCommit: () => {
+			commitRetime({
+				rate,
+				maintainPitch,
+				pitchSemitones: pendingPitchRef.current,
+			});
 		},
 	});
 
@@ -134,21 +206,62 @@ export function SpeedTab({
 							onScrub={speedDraft.scrubTo}
 							onScrubEnd={speedDraft.commitScrub}
 							onReset={() =>
-								commitRetime({ rate: DEFAULT_RETIME_RATE, maintainPitch })
+								commitRetime({
+									rate: DEFAULT_RETIME_RATE,
+									maintainPitch,
+									pitchSemitones,
+								})
 							}
 							isDefault={rate === DEFAULT_RETIME_RATE}
 						/>
 					</SectionField>
 					<div className="flex items-center justify-between">
-						<span className="text-sm">改变音调</span>
+						<span className="text-sm">保持原音调</span>
 						<Switch
-							checked={!maintainPitch}
+							checked={maintainPitch}
 							disabled={!isPitchPreserveAvailable}
 							onCheckedChange={(checked) =>
-								commitRetime({ rate, maintainPitch: !checked })
+								commitRetime({
+									rate,
+									maintainPitch: checked,
+									pitchSemitones,
+								})
 							}
 						/>
 					</div>
+					<SectionField label="音调">
+						<NumberField
+							value={pitchDraft.displayValue}
+							suffix=" 半音"
+							scrubRanges={[
+								{
+									from: MIN_PITCH_SEMITONES,
+									to: MAX_PITCH_SEMITONES,
+									pixelsPerUnit: 18,
+								},
+							]}
+							scrubClamp={{
+								min: MIN_PITCH_SEMITONES,
+								max: MAX_PITCH_SEMITONES,
+							}}
+							onFocus={() => {
+								pendingPitchRef.current = pitchSemitones;
+								pitchDraft.onFocus();
+							}}
+							onChange={pitchDraft.onChange}
+							onBlur={pitchDraft.onBlur}
+							onScrub={pitchDraft.scrubTo}
+							onScrubEnd={pitchDraft.commitScrub}
+							onReset={() =>
+								commitRetime({
+									rate,
+									maintainPitch,
+									pitchSemitones: DEFAULT_PITCH_SEMITONES,
+								})
+							}
+							isDefault={pitchSemitones === DEFAULT_PITCH_SEMITONES}
+						/>
+					</SectionField>
 				</SectionFields>
 			</SectionContent>
 		</Section>

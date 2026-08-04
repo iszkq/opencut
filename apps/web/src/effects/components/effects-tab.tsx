@@ -317,16 +317,16 @@ function EffectSection({
 							<div key={param.key} className="flex flex-col gap-3.5">
 								<div className="px-4">
 									<PropertyParamField
-											param={param}
-											value={renderParams[param.key] ?? param.default}
-											onPreview={previewParam(param.key)}
-											onCommit={onCommit}
-										/>
-										{effect.type === "hand-draw" && param.key === "colorDelay" ? (
-											<HandDrawParamHint paramKey={param.key} />
-										) : effect.type === "hand-draw" ? (
-											<HandDrawParamHint paramKey={param.key} />
-										) : null}
+										param={param}
+										value={renderParams[param.key] ?? param.default}
+										onPreview={previewParam(param.key)}
+										onCommit={onCommit}
+									/>
+									{effect.type === "hand-draw" && param.key === "colorDelay" ? (
+										<HandDrawParamHint paramKey={param.key} />
+									) : effect.type === "hand-draw" ? (
+										<HandDrawParamHint paramKey={param.key} />
+									) : null}
 								</div>
 								<Separator />
 							</div>
@@ -352,7 +352,9 @@ function HandDrawParamHint({ paramKey }: { paramKey: string }) {
 				: paramKey === "roughness"
 					? "范围：0%–100%。数值越低线条越平滑；数值越高越有手绘颗粒感；建议 35%–70%。"
 					: null;
-	return hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null;
+	return hint ? (
+		<p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+	) : null;
 }
 
 function HandDrawRegionsSection({
@@ -362,10 +364,47 @@ function HandDrawRegionsSection({
 	regions: HandDrawRegion[];
 	onChange: (regions: HandDrawRegion[]) => void;
 }) {
-	const updateDirection = ({ id, direction }: { id: string; direction: HandDrawDirection }) =>
+	const updateDirection = ({
+		id,
+		direction,
+	}: {
+		id: string;
+		direction: HandDrawDirection;
+	}) =>
 		onChange(
 			regions.map((region) =>
 				region.id === id ? { ...region, direction } : region,
+			),
+		);
+	const updateDuration = ({
+		id,
+		durationSeconds,
+	}: {
+		id: string;
+		durationSeconds: number;
+	}) =>
+		onChange(
+			regions.map((region) =>
+				region.id === id
+					? {
+							...region,
+							durationSeconds: Math.max(0.1, durationSeconds),
+						}
+					: region,
+			),
+		);
+	const updatePause = ({
+		id,
+		pauseSeconds,
+	}: {
+		id: string;
+		pauseSeconds: number;
+	}) =>
+		onChange(
+			regions.map((region) =>
+				region.id === id
+					? { ...region, pauseSeconds: Math.max(0, pauseSeconds) }
+					: region,
 			),
 		);
 
@@ -390,40 +429,110 @@ function HandDrawRegionsSection({
 					<span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
 						{index + 1}
 					</span>
-					<select
-						className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs"
-						value={region.direction}
-						onChange={(event) =>
-							updateDirection({
-								id: region.id,
-								direction: isHandDrawDirection(event.target.value)
-									? event.target.value
-									: "left-to-right",
-							})
-						}
-					>
-						{HAND_DRAW_DIRECTIONS.map((direction) => (
-							<option key={direction} value={direction}>
-								{direction === "left-to-right"
-									? "左→右，上→下"
-									: direction === "right-to-left"
-										? "右→左，上→下"
-										: direction === "top-to-bottom"
-											? "上→下，左→右"
-											: "下→上，左→右"}
-							</option>
-						))}
-					</select>
+					<div className="flex min-w-0 flex-1 flex-col gap-2">
+						<select
+							className="h-8 min-w-0 rounded-md border bg-background px-2 text-xs"
+							value={region.direction}
+							onChange={(event) =>
+								updateDirection({
+									id: region.id,
+									direction: isHandDrawDirection(event.target.value)
+										? event.target.value
+										: "left-to-right",
+								})
+							}
+						>
+							{HAND_DRAW_DIRECTIONS.map((direction) => (
+								<option key={direction} value={direction}>
+									{direction === "left-to-right"
+										? "左→右，上→下"
+										: direction === "right-to-left"
+											? "右→左，上→下"
+											: direction === "top-to-bottom"
+												? "上→下，左→右"
+												: "下→上，左→右"}
+								</option>
+							))}
+						</select>
+						<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+							绘制时长
+							<HandDrawDurationInput
+								value={region.durationSeconds}
+								onCommit={(durationSeconds) =>
+									updateDuration({ id: region.id, durationSeconds })
+								}
+							/>
+							秒
+							<span className="ml-2">停顿时长</span>
+							<HandDrawDurationInput
+								value={region.pauseSeconds}
+								minimum={0}
+								onCommit={(pauseSeconds) =>
+									updatePause({ id: region.id, pauseSeconds })
+								}
+							/>
+							秒
+						</div>
+					</div>
 					<Button
 						variant="ghost"
 						size="icon"
 						aria-label={`删除分区 ${index + 1}`}
-						onClick={() => onChange(regions.filter((item) => item.id !== region.id))}
+						onClick={() =>
+							onChange(regions.filter((item) => item.id !== region.id))
+						}
 					>
 						<HugeiconsIcon icon={Delete02Icon} />
 					</Button>
 				</div>
 			))}
 		</div>
+	);
+}
+
+function HandDrawDurationInput({
+	value,
+	minimum = 0.1,
+	onCommit,
+}: {
+	value: number;
+	minimum?: number;
+	onCommit: (value: number) => void;
+}) {
+	const [draft, setDraft] = useState(String(value));
+	const commitDraft = () => {
+		const next = Number.parseFloat(draft);
+		if (Number.isFinite(next) && next >= minimum) {
+			onCommit(next);
+			return true;
+		}
+		return false;
+	};
+	return (
+		<input
+			type="text"
+			inputMode="decimal"
+			className="h-8 w-24 rounded-md border bg-background px-2 text-xs text-foreground"
+			value={draft}
+			onFocus={(event) => event.currentTarget.select()}
+			onChange={(event) => {
+				const nextDraft = event.target.value;
+				setDraft(nextDraft);
+				const next = Number.parseFloat(nextDraft);
+				// Valid values take effect as soon as they are typed. Keeping an
+				// invalid/empty draft local still lets users clear and replace it.
+				if (Number.isFinite(next) && next >= minimum) onCommit(next);
+			}}
+			onKeyDown={(event) => {
+				if (event.key !== "Enter") return;
+				event.preventDefault();
+				if (commitDraft()) event.currentTarget.blur();
+			}}
+			onBlur={() => {
+				if (!commitDraft()) {
+					setDraft(String(value));
+				}
+			}}
+		/>
 	);
 }

@@ -1,6 +1,12 @@
 "use client";
 
-import { createContext, useContext, useRef, useState, type DragEvent } from "react";
+import {
+	createContext,
+	useContext,
+	useRef,
+	useState,
+	type DragEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { useEditor } from "@/editor/use-editor";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
@@ -51,10 +57,18 @@ import {
 	getSourceAudioActionLabel,
 	isSourceAudioSeparated,
 } from "@/timeline/audio-separation";
-import { buildWaveformGainSamples, isElementMuted } from "@/timeline/audio-state";
+import {
+	buildWaveformGainSamples,
+	isElementMuted,
+} from "@/timeline/audio-state";
 import { getTimelinePixelsPerSecond } from "@/timeline";
 import { buildWaveformSourceKey } from "@/media/waveform-summary";
-import { addMediaTime, mediaTimeToSeconds, type MediaTime, TICKS_PER_SECOND } from "@/wasm";
+import {
+	addMediaTime,
+	mediaTimeToSeconds,
+	type MediaTime,
+	TICKS_PER_SECOND,
+} from "@/wasm";
 import {
 	getActionDefinition,
 	type TAction,
@@ -228,7 +242,7 @@ interface TimelineElementProps {
 	zoomLevel: number;
 	isSelected: boolean;
 	onResizeStart: (params: {
-		event: React.MouseEvent;
+		event: React.PointerEvent;
 		element: TimelineElementType;
 		track: TimelineTrack;
 		side: "left" | "right";
@@ -299,7 +313,8 @@ export function TimelineElement({
 			: // A cross-transition starts the incoming clip early for the renderer.
 				// Keep that implementation detail out of the timeline so the two
 				// clips still meet at one visible seam, like a normal desktop editor.
-				(renderElement.transitionIn?.restoreStartTime ?? renderElement.startTime);
+				(renderElement.transitionIn?.restoreStartTime ??
+				renderElement.startTime);
 	const displayedStartTime = elementStartTime;
 	const displayedDuration = renderElement.duration;
 	const elementWidth = timelineTimeToPixels({
@@ -413,7 +428,9 @@ export function TimelineElement({
 
 		const bounds = event.currentTarget.getBoundingClientRect();
 		const closestSide: TransitionPlacement =
-			event.clientX - bounds.left <= bounds.right - event.clientX ? "in" : "out";
+			event.clientX - bounds.left <= bounds.right - event.clientX
+				? "in"
+				: "out";
 		if (dragData.transitionUsage === "cut") {
 			return { usage: "cut", placement: closestSide };
 		}
@@ -473,7 +490,9 @@ export function TimelineElement({
 			return;
 		}
 		const existing =
-			dropTarget.placement === "in" ? element.transitionIn : element.transitionOut;
+			dropTarget.placement === "in"
+				? element.transitionIn
+				: element.transitionOut;
 		if (existing?.kind === "cut") {
 			toast.error("该片段这一侧已有接缝转场，请先删除后再添加入场或出场效果");
 			return;
@@ -486,16 +505,27 @@ export function TimelineElement({
 				placement: dropTarget.placement,
 			}),
 		});
-		toast.success(`已添加${dropTarget.placement === "in" ? "入场" : "出场"}效果：${dragData.name}`);
+		toast.success(
+			`已添加${dropTarget.placement === "in" ? "入场" : "出场"}效果：${dragData.name}`,
+		);
 	};
 
-	const removeTransition = ({ placement }: { placement: TransitionPlacement }) => {
+	const removeTransition = ({
+		placement,
+	}: {
+		placement: TransitionPlacement;
+	}) => {
 		if (!isVisualElement(element)) return;
-		const current = placement === "in" ? element.transitionIn : element.transitionOut;
+		const current =
+			placement === "in" ? element.transitionIn : element.transitionOut;
 		if (!current) return;
 		if (current.kind !== "cut") {
 			editor.timeline.updateElements({
-				updates: buildRemoveSingleClipTransitionUpdates({ trackId: track.id, element, placement }),
+				updates: buildRemoveSingleClipTransitionUpdates({
+					trackId: track.id,
+					element,
+					placement,
+				}),
 			});
 			toast.success("已移除效果");
 			return;
@@ -528,7 +558,8 @@ export function TimelineElement({
 		inDuration: number;
 	}) => {
 		if (!isVisualElement(element)) return;
-		const current = placement === "in" ? element.transitionIn : element.transitionOut;
+		const current =
+			placement === "in" ? element.transitionIn : element.transitionOut;
 		if (!current) return;
 		const activeScene = editor.scenes.getActiveSceneOrNull();
 		const transition = TRANSITIONS.find(
@@ -631,11 +662,17 @@ export function TimelineElement({
 							<div
 								className={cn(
 									"pointer-events-none absolute top-0 z-30 flex h-full w-7 items-center justify-center bg-cyan-500/85 text-[10px] font-medium text-white",
-									transitionDropTarget.placement === "in" ? "left-0" : "right-0",
+									transitionDropTarget.placement === "in"
+										? "left-0"
+										: "right-0",
 								)}
 							>
 								<span className="[writing-mode:vertical-rl]">
-									{transitionDropTarget.usage === "cut" ? "接缝" : transitionDropTarget.placement === "in" ? "入场" : "出场"}
+									{transitionDropTarget.usage === "cut"
+										? "接缝"
+										: transitionDropTarget.placement === "in"
+											? "入场"
+											: "出场"}
 								</span>
 							</div>
 						)}
@@ -644,11 +681,19 @@ export function TimelineElement({
 								name={element.transitionIn.name}
 								kind="in"
 								duration={element.transitionIn.duration}
-								outDuration={element.transitionIn.outDuration ?? element.transitionIn.duration}
-								inDuration={element.transitionIn.inDuration ?? element.transitionIn.duration}
+								outDuration={
+									element.transitionIn.outDuration ??
+									element.transitionIn.duration
+								}
+								inDuration={
+									element.transitionIn.inDuration ??
+									element.transitionIn.duration
+								}
 								pixelsPerSecond={timelinePixelsPerSecond}
 								onRemove={() => removeTransition({ placement: "in" })}
-								onUpdate={(durations) => updateTransition({ placement: "in", ...durations })}
+								onUpdate={(durations) =>
+									updateTransition({ placement: "in", ...durations })
+								}
 							/>
 						)}
 						{element.transitionOut && (
@@ -656,11 +701,19 @@ export function TimelineElement({
 								name={element.transitionOut.name}
 								kind={element.transitionOut.kind ?? "cut"}
 								duration={element.transitionOut.duration}
-								outDuration={element.transitionOut.outDuration ?? element.transitionOut.duration}
-								inDuration={element.transitionOut.inDuration ?? element.transitionOut.duration}
+								outDuration={
+									element.transitionOut.outDuration ??
+									element.transitionOut.duration
+								}
+								inDuration={
+									element.transitionOut.inDuration ??
+									element.transitionOut.duration
+								}
 								pixelsPerSecond={timelinePixelsPerSecond}
 								onRemove={() => removeTransition({ placement: "out" })}
-								onUpdate={(durations) => updateTransition({ placement: "out", ...durations })}
+								onUpdate={(durations) =>
+									updateTransition({ placement: "out", ...durations })
+								}
 							/>
 						)}
 						{isSelected && (
@@ -810,13 +863,23 @@ function TransitionMarker({
 	const propInDuration = mediaTimeToSeconds({ time: initialInDuration });
 	const [outDuration, setOutDuration] = useState(propOutDuration);
 	const [inDuration, setInDuration] = useState(propInDuration);
-	const width = Math.max(48, mediaTimeToSeconds({ time: duration }) * pixelsPerSecond);
+	const width = Math.max(
+		48,
+		mediaTimeToSeconds({ time: duration }) * pixelsPerSecond,
+	);
 	const position =
-		kind === "in"
-			? { left: `${-width / 2}px` }
-			: { right: `${-width / 2}px` };
-	const label = kind === "cut" ? `${name}转场` : `${name}${kind === "in" ? "入场" : "出场"}`;
-	const changeDuration = ({ side, value }: { side: "in" | "out"; value: number }) => {
+		kind === "in" ? { left: `${-width / 2}px` } : { right: `${-width / 2}px` };
+	const label =
+		kind === "cut"
+			? `${name}转场`
+			: `${name}${kind === "in" ? "入场" : "出场"}`;
+	const changeDuration = ({
+		side,
+		value,
+	}: {
+		side: "in" | "out";
+		value: number;
+	}) => {
 		if (side === "in") {
 			setInDuration(value);
 			onUpdate({ outDuration, inDuration: value });
@@ -847,22 +910,59 @@ function TransitionMarker({
 			? createPortal(
 					<div
 						className="fixed z-[1000] w-56 rounded-md border bg-popover p-2 text-foreground shadow-xl"
-						style={{ top: `${panelPosition.top}px`, left: `${panelPosition.left}px` }}
+						style={{
+							top: `${panelPosition.top}px`,
+							left: `${panelPosition.left}px`,
+						}}
 					>
 						<div className="mb-2 flex items-center justify-between text-xs font-medium">
 							<span>{label}</span>
-							<button type="button" className="rounded px-1 hover:bg-muted" onClick={closePanel}>关闭</button>
+							<button
+								type="button"
+								className="rounded px-1 hover:bg-muted"
+								onClick={closePanel}
+							>
+								关闭
+							</button>
 						</div>
 						{kind !== "in" && (
 							<label className="mb-2 block text-xs">
-								{kind === "cut" ? "出场时长" : "时长"} {outDuration.toFixed(1)} 秒
-								<input className="mt-1 w-full accent-cyan-500" type="range" min="0.1" max="4" step="0.1" value={outDuration} onChange={(event) => changeDuration({ side: "out", value: Number(event.target.value) })} />
+								{kind === "cut" ? "出场时长" : "时长"} {outDuration.toFixed(1)}{" "}
+								秒
+								<input
+									className="mt-1 w-full accent-cyan-500"
+									type="range"
+									min="0.1"
+									max="4"
+									step="0.1"
+									value={outDuration}
+									onChange={(event) =>
+										changeDuration({
+											side: "out",
+											value: Number(event.target.value),
+										})
+									}
+								/>
 							</label>
 						)}
 						{kind !== "out" && (
 							<label className="block text-xs">
-								{kind === "cut" ? "入场时长" : "时长"} {inDuration.toFixed(1)} 秒
-								<input className="mt-1 w-full accent-cyan-500" type="range" min="0.1" max="4" step="0.1" value={inDuration} onChange={(event) => changeDuration({ side: "in", value: Number(event.target.value) })} />
+								{kind === "cut" ? "入场时长" : "时长"} {inDuration.toFixed(1)}{" "}
+								秒
+								<input
+									className="mt-1 w-full accent-cyan-500"
+									type="range"
+									min="0.1"
+									max="4"
+									step="0.1"
+									value={inDuration}
+									onChange={(event) =>
+										changeDuration({
+											side: "in",
+											value: Number(event.target.value),
+										})
+									}
+								/>
 							</label>
 						)}
 					</div>,
@@ -879,7 +979,11 @@ function TransitionMarker({
 				<button
 					type="button"
 					className="min-w-0 grow truncate px-1 hover:bg-cyan-600"
-					onClick={(event) => { event.preventDefault(); event.stopPropagation(); openPanel(); }}
+					onClick={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						openPanel();
+					}}
 				>
 					{label}
 				</button>
@@ -887,7 +991,11 @@ function TransitionMarker({
 					type="button"
 					className="px-1 text-xs hover:bg-cyan-700"
 					aria-label={`删除${name}转场`}
-					onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRemove(); }}
+					onClick={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						onRemove();
+					}}
 				>
 					×
 				</button>
@@ -926,7 +1034,7 @@ function ElementInner({
 		element: TimelineElementType;
 	}) => void;
 	onResizeStart: (params: {
-		event: React.MouseEvent;
+		event: React.PointerEvent;
 		element: TimelineElementType;
 		track: TimelineTrack;
 		side: "left" | "right";
@@ -1019,7 +1127,7 @@ function ResizeHandle({
 	element: TimelineElementType;
 	track: TimelineTrack;
 	onResizeStart: (params: {
-		event: React.MouseEvent;
+		event: React.PointerEvent;
 		element: TimelineElementType;
 		track: TimelineTrack;
 		side: "left" | "right";
@@ -1030,13 +1138,23 @@ function ResizeHandle({
 		<button
 			type="button"
 			className={cn(
-				"absolute top-0 bottom-0 w-2",
-				isLeft ? "-left-1 cursor-w-resize" : "-right-1 cursor-e-resize",
+				"absolute top-0 bottom-0 z-40 flex w-6 touch-none items-center justify-center cursor-ew-resize",
+				isLeft ? "-left-3" : "-right-3",
 			)}
-			onMouseDown={(event) => onResizeStart({ event, element, track, side })}
+			onPointerDown={(event) => {
+				event.currentTarget.setPointerCapture(event.pointerId);
+				onResizeStart({ event, element, track, side });
+			}}
 			onClick={(event) => event.stopPropagation()}
-			aria-label={`${isLeft ? "Left" : "Right"} resize handle`}
-		></button>
+			aria-label={`${isLeft ? "左侧" : "右侧"}拖拽裁剪手柄`}
+			title={
+				element.type === "audio"
+					? "拖动可拉长变慢、拉短变快"
+					: "拖动可裁短，向外拖动可恢复原始媒体长度"
+			}
+		>
+			<span className="h-9 w-1.5 rounded-full bg-white shadow-md ring-1 ring-black/20" />
+		</button>
 	);
 }
 
@@ -1108,7 +1226,7 @@ function KeyframeIndicators({
 						indicatorTime: indicator.time,
 					})
 				}
-						aria-label="选择关键帧"
+				aria-label="选择关键帧"
 			>
 				<HugeiconsIcon
 					icon={KeyframeIcon}
@@ -1261,7 +1379,7 @@ function ExpandedKeyframeLanes({
 											indicatorTime: kf.time,
 										});
 									}}
-				aria-label="选择关键帧"
+									aria-label="选择关键帧"
 								>
 									<HugeiconsIcon
 										icon={KeyframeIcon}
@@ -1295,7 +1413,9 @@ function TextElementContent({
 	return (
 		<div className="flex size-full items-center justify-start pl-2">
 			<span className="truncate text-xs text-white">
-				{typeof element.params.content === "string" ? element.params.content : ""}
+				{typeof element.params.content === "string"
+					? element.params.content
+					: ""}
 			</span>
 		</div>
 	);
@@ -1600,7 +1720,7 @@ function MuteMenuItem({
 
 	return (
 		<ActionMenuItem action="toggle-elements-muted-selected" icon={getIcon()}>
-		{isMuted ? "取消静音" : "静音"}
+			{isMuted ? "取消静音" : "静音"}
 		</ActionMenuItem>
 	);
 }

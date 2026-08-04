@@ -1,6 +1,6 @@
 import type { EditorCore } from "@/core";
 import { TICKS_PER_SECOND } from "@/wasm";
-import { clampRetimeRate, shouldMaintainPitch } from "@/retime/rate";
+import { clampRetimeRate, shouldRenderRetimeAudio } from "@/retime/rate";
 import type { AudioClipSource } from "@/media/audio";
 import { createAudioContext, collectAudioClips } from "@/media/audio";
 import {
@@ -462,9 +462,10 @@ export class AudioManager {
 		return (
 			this.hasCurveRetime({ clip }) ||
 			hasAnimatedVolume({ element: clip.timelineElement }) ||
-			shouldMaintainPitch({
+			shouldRenderRetimeAudio({
 				rate: clip.retime?.rate ?? 1,
 				maintainPitch: clip.retime?.maintainPitch,
+				pitchSemitones: clip.retime?.pitchSemitones,
 			})
 		);
 	}
